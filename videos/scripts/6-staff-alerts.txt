@@ -1,0 +1,9 @@
+title: Northgate · Staff alerts
+[frame: n-alerts-overview]
+Staff alerts makes sure a human knows when something goes wrong. It has two triggers: crashes from any Northgate workflow, and handled problems that the other workflows report.
+[frame: n-alerts-crash-details]
+Crash details turns n8n's error data into an alert: the kind of alert, the workflow name, the step that failed, the message and a link to the run.
+[frame: n-alerts-push]
+Push to staff sends the alert through Pushover, using the clinic's Pushover credential. The user key is hidden here. The message combines the workflow, the step and what happened.
+[frame: n-alerts-log]
+Log alert inserts every alert into a data table, with each column mapped by hand, including whether the push succeeded. So there's a record even if a notification never arrives.

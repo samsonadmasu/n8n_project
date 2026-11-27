@@ -1,0 +1,252 @@
+{
+  "name": "Northgate · Speak",
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Africa/Addis_Ababa",
+    "errorWorkflow": "IirH2iDy25qNBr69"
+  },
+  "nodes": [
+    {
+      "name": "Text in",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "inputSource": "workflowInputs",
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "reply",
+              "type": "string"
+            },
+            {
+              "name": "sessionId",
+              "type": "string"
+            },
+            {
+              "name": "simulate",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "TTS · ElevenLabs",
+      "type": "@elevenlabs/n8n-nodes-elevenlabs.elevenLabs",
+      "typeVersion": 1,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "resource": "speech",
+        "text": "={{ $json.reply }}",
+        "voice": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Text in').first().json.simulate === 'tts' ? 'simulated-broken-voice' : 'CwhRBWXzGAHq8TQ4Fs17' }}"
+        },
+        "additionalOptions": {},
+        "requestOptions": {}
+      },
+      "credentials": {
+        "elevenLabsApi": {
+          "id": "SvCckO55wBkLq7Iz",
+          "name": "ElevenLabs account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 500,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "name": "Audio",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        440,
+        200
+      ],
+      "parameters": {
+        "includeOtherFields": true,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "Audio-ok",
+              "name": "ok",
+              "type": "boolean",
+              "value": true
+            },
+            {
+              "id": "Audio-alerted",
+              "name": "alerted",
+              "type": "boolean",
+              "value": false
+            }
+          ]
+        },
+        "options": {
+          "stripBinary": false
+        }
+      }
+    },
+    {
+      "name": "TTS alert",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        440,
+        420
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "TTS alert-workflow",
+              "name": "workflow",
+              "type": "string",
+              "value": "Northgate · Speak"
+            },
+            {
+              "id": "TTS alert-node",
+              "name": "node",
+              "type": "string",
+              "value": "TTS · ElevenLabs"
+            },
+            {
+              "id": "TTS alert-message",
+              "name": "message",
+              "type": "string",
+              "value": "=Text-to-speech failed, caller got text only: {{ ($json.error && ($json.error.message || $json.error)) || 'unknown error' }} (session {{ $('Text in').first().json.sessionId }})"
+            },
+            {
+              "id": "TTS alert-executionUrl",
+              "name": "executionUrl",
+              "type": "string",
+              "value": "=https://YOUR-N8N-INSTANCE.app.n8n.cloud/workflow/{{ $workflow.id }}/executions/{{ $execution.id }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Tell staff (TTS)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        660,
+        420
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "IirH2iDy25qNBr69"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "name": "No audio",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        880,
+        420
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "No audio-ok",
+              "name": "ok",
+              "type": "boolean",
+              "value": false
+            },
+            {
+              "id": "No audio-alerted",
+              "name": "alerted",
+              "type": "boolean",
+              "value": "={{ !$json.error }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Text in": {
+      "main": [
+        [
+          {
+            "node": "TTS · ElevenLabs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TTS · ElevenLabs": {
+      "main": [
+        [
+          {
+            "node": "Audio",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "TTS alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TTS alert": {
+      "main": [
+        [
+          {
+            "node": "Tell staff (TTS)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tell staff (TTS)": {
+      "main": [
+        [
+          {
+            "node": "No audio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {
+    "Text in": [
+      {
+        "json": {
+          "reply": "Hello, this is Northgate Physio. How can I help you today?",
+          "sessionId": "pinned-demo",
+          "simulate": ""
+        }
+      }
+    ]
+  }
+}

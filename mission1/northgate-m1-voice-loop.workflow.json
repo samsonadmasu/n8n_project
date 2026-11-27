@@ -1,0 +1,217 @@
+{
+  "name": "Northgate · M1 Voice Loop",
+  "settings": { "executionOrder": "v1", "binaryMode": "separate" },
+  "nodes": [
+    {
+      "name": "Voice request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.2,
+      "position": [0, 300],
+      "webhookId": "333f6c8b-dba0-43d1-9dab-dd47fcc3b03d",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "northgate-voice",
+        "authentication": "none",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      }
+    },
+    {
+      "name": "Validate recording",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 300],
+      "notes": "Rejects missing, empty, oversized or non-audio uploads before we spend money on ElevenLabs or the LLM.",
+      "parameters": {
+        "jsCode": "// Cheap checks first: every rejected request here costs nothing downstream.\nconst MAX_BYTES = 5 * 1024 * 1024;   // ~5 minutes of speech\nconst MIN_BYTES = 1000;              // shorter than this is silence or a broken recording\nconst ALLOWED = ['audio/webm', 'video/webm', 'audio/mp4', 'audio/x-m4a', 'audio/m4a', 'audio/aac', 'audio/ogg', 'audio/mpeg', 'audio/wav', 'audio/x-wav'];\n\nconst item = $input.first();\nconst headers = item.json.headers || {};\nconst requestId = String(headers['x-request-id'] || $execution.id).slice(0, 80);\nconst base = { requestId, startedAt: Date.now() };\nconst reject = (error, extra = {}) => [{ json: { ...base, ok: false, status: 400, error, ...extra } }];\n\nconst bin = item.binary && item.binary.audio;\nif (!bin) return reject('No recording received. Send it as a form field named \"audio\".');\n\nconst mimeType = (bin.mimeType || '').split(';')[0].trim().toLowerCase();\nconst bytes = (await this.helpers.getBinaryDataBuffer(0, 'audio')).length;\n\nif (bytes < MIN_BYTES) return reject(`The recording is empty or too short (${bytes} bytes). Speak for at least a second.`, { bytes, mimeType });\nif (bytes > MAX_BYTES) return reject(`The recording is ${(bytes / 1048576).toFixed(1)} MB. The limit is 5 MB.`, { bytes, mimeType });\nif (!ALLOWED.includes(mimeType)) return reject(`Audio type \"${mimeType || 'unknown'}\" isn't supported. Send webm, mp4/m4a, ogg, mp3 or wav.`, { bytes, mimeType });\n\nreturn [{ json: { ...base, ok: true, bytes, mimeType }, binary: item.binary }];"
+      }
+    },
+    {
+      "name": "Recording OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [440, 300],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [
+            {
+              "id": "c-ok",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "STT · ElevenLabs",
+      "type": "@elevenlabs/n8n-nodes-elevenlabs.elevenLabs",
+      "typeVersion": 1,
+      "position": [680, 200],
+      "credentials": { "elevenLabsApi": { "id": "SvCckO55wBkLq7Iz", "name": "ElevenLabs account" } },
+      "parameters": {
+        "resource": "speech",
+        "operation": "speechToText",
+        "file": "audio",
+        "additionalOptions": {},
+        "requestOptions": {}
+      }
+    },
+    {
+      "name": "Receptionist agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [900, 200],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.text }}",
+        "options": {
+          "systemMessage": "You are the voice receptionist for Northgate Physio, a physiotherapy clinic with three therapists.\nYour reply is turned into speech, so: at most two short sentences, plain words, no lists, no markdown, no emoji.\nYou cannot book appointments yet. If the caller wants one, ask for their name, phone number and preferred day and time, and say a member of staff will confirm.\nNever give medical advice. If the caller mentions chest pain, trouble breathing, a fall with a head injury, or any emergency, tell them to call emergency services now."
+        }
+      }
+    },
+    {
+      "name": "Gemini model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.2,
+      "position": [900, 420],
+      "credentials": { "googlePalmApi": { "id": "Gq9VWEHrCD8soKLO", "name": "Google Gemini(PaLM) Api account" } },
+      "parameters": { "options": {} }
+    },
+    {
+      "name": "TTS · ElevenLabs",
+      "type": "@elevenlabs/n8n-nodes-elevenlabs.elevenLabs",
+      "typeVersion": 1,
+      "position": [1180, 200],
+      "credentials": { "elevenLabsApi": { "id": "SvCckO55wBkLq7Iz", "name": "ElevenLabs account" } },
+      "parameters": {
+        "resource": "speech",
+        "text": "={{ $json.output }}",
+        "voice": { "__rl": true, "mode": "list", "value": "CwhRBWXzGAHq8TQ4Fs17", "cachedResultName": "Roger - Laid-Back, Casual, Resonant" },
+        "additionalOptions": {},
+        "requestOptions": {}
+      }
+    },
+    {
+      "name": "Reply with audio",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [1400, 200],
+      "parameters": {
+        "respondWith": "binary",
+        "responseDataSource": "set",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              { "name": "X-Request-Id", "value": "={{ $('Validate recording').item.json.requestId }}" },
+              { "name": "Access-Control-Expose-Headers", "value": "X-Request-Id" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "Reply with error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [680, 440],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: $json.error, requestId: $json.requestId }) }}",
+        "options": { "responseCode": "={{ $json.status }}" }
+      }
+    },
+    {
+      "name": "Log row · answered",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1620, 200],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "a1", "name": "requestId", "type": "string", "value": "={{ $('Validate recording').item.json.requestId }}" },
+            { "id": "a2", "name": "outcome", "type": "string", "value": "answered" },
+            { "id": "a3", "name": "httpStatus", "type": "number", "value": 200 },
+            { "id": "a4", "name": "audioBytes", "type": "number", "value": "={{ $('Validate recording').item.json.bytes }}" },
+            { "id": "a5", "name": "mimeType", "type": "string", "value": "={{ $('Validate recording').item.json.mimeType }}" },
+            { "id": "a6", "name": "transcriptChars", "type": "number", "value": "={{ ($('STT · ElevenLabs').item.json.text || '').length }}" },
+            { "id": "a7", "name": "replyChars", "type": "number", "value": "={{ ($('Receptionist agent').item.json.output || '').length }}" },
+            { "id": "a8", "name": "totalMs", "type": "number", "value": "={{ Date.now() - $('Validate recording').item.json.startedAt }}" },
+            { "id": "a9", "name": "error", "type": "string", "value": "" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Log row · rejected",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [900, 640],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "b1", "name": "requestId", "type": "string", "value": "={{ $('Validate recording').item.json.requestId }}" },
+            { "id": "b2", "name": "outcome", "type": "string", "value": "rejected" },
+            { "id": "b3", "name": "httpStatus", "type": "number", "value": "={{ $('Validate recording').item.json.status }}" },
+            { "id": "b4", "name": "audioBytes", "type": "number", "value": "={{ $('Validate recording').item.json.bytes ?? 0 }}" },
+            { "id": "b5", "name": "mimeType", "type": "string", "value": "={{ $('Validate recording').item.json.mimeType ?? '' }}" },
+            { "id": "b6", "name": "transcriptChars", "type": "number", "value": 0 },
+            { "id": "b7", "name": "replyChars", "type": "number", "value": 0 },
+            { "id": "b8", "name": "totalMs", "type": "number", "value": "={{ Date.now() - $('Validate recording').item.json.startedAt }}" },
+            { "id": "b9", "name": "error", "type": "string", "value": "={{ $('Validate recording').item.json.error }}" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Log request",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [1840, 420],
+      "parameters": {
+        "resource": "row",
+        "operation": "insert",
+        "dataTableId": { "__rl": true, "mode": "id", "value": "UCyU48d9L1hJWBQU" },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            { "id": "requestId", "displayName": "requestId", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "outcome", "displayName": "outcome", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "httpStatus", "displayName": "httpStatus", "required": false, "defaultMatch": false, "display": true, "type": "number", "canBeUsedToMatch": true },
+            { "id": "audioBytes", "displayName": "audioBytes", "required": false, "defaultMatch": false, "display": true, "type": "number", "canBeUsedToMatch": true },
+            { "id": "mimeType", "displayName": "mimeType", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "transcriptChars", "displayName": "transcriptChars", "required": false, "defaultMatch": false, "display": true, "type": "number", "canBeUsedToMatch": true },
+            { "id": "replyChars", "displayName": "replyChars", "required": false, "defaultMatch": false, "display": true, "type": "number", "canBeUsedToMatch": true },
+            { "id": "totalMs", "displayName": "totalMs", "required": false, "defaultMatch": false, "display": true, "type": "number", "canBeUsedToMatch": true },
+            { "id": "error", "displayName": "error", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true }
+          ]
+        },
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Voice request": { "main": [[{ "node": "Validate recording", "type": "main", "index": 0 }]] },
+    "Validate recording": { "main": [[{ "node": "Recording OK?", "type": "main", "index": 0 }]] },
+    "Recording OK?": { "main": [
+      [{ "node": "STT · ElevenLabs", "type": "main", "index": 0 }],
+      [{ "node": "Reply with error", "type": "main", "index": 0 }]
+    ] },
+    "STT · ElevenLabs": { "main": [[{ "node": "Receptionist agent", "type": "main", "index": 0 }]] },
+    "Gemini model": { "ai_languageModel": [[{ "node": "Receptionist agent", "type": "ai_languageModel", "index": 0 }]] },
+    "Receptionist agent": { "main": [[{ "node": "TTS · ElevenLabs", "type": "main", "index": 0 }]] },
+    "TTS · ElevenLabs": { "main": [[{ "node": "Reply with audio", "type": "main", "index": 0 }]] },
+    "Reply with audio": { "main": [[{ "node": "Log row · answered", "type": "main", "index": 0 }]] },
+    "Reply with error": { "main": [[{ "node": "Log row · rejected", "type": "main", "index": 0 }]] },
+    "Log row · answered": { "main": [[{ "node": "Log request", "type": "main", "index": 0 }]] },
+    "Log row · rejected": { "main": [[{ "node": "Log request", "type": "main", "index": 0 }]] }
+  }
+}

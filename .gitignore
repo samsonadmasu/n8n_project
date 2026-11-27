@@ -1,0 +1,9 @@
+.env
+mission1/.env
+mission1/fixtures/too-big.webm
+.DS_Store
+*.mp4
+__pycache__/
+videos/.env
+videos/.cache/
+.playwright-mcp/

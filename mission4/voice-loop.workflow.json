@@ -1,0 +1,1055 @@
+{
+  "name": "Northgate · Voice Loop",
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Africa/Addis_Ababa",
+    "errorWorkflow": "IirH2iDy25qNBr69"
+  },
+  "nodes": [
+    {
+      "name": "Voice request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "northgate-voice",
+        "authentication": "none",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "webhookId": "333f6c8b-dba0-43d1-9dab-dd47fcc3b03d"
+    },
+    {
+      "name": "Validate request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Cheap checks first: every rejected request here costs nothing downstream.\n// Accepts a recording (form field \"audio\") or a typed turn (form field \"message\").\nconst MAX_BYTES = 5 * 1024 * 1024;   // ~5 minutes of speech\nconst MIN_BYTES = 1000;              // shorter than this is silence or a broken recording\nconst ALLOWED = ['audio/webm', 'video/webm', 'audio/mp4', 'audio/x-m4a', 'audio/m4a', 'audio/aac', 'audio/ogg', 'audio/mpeg', 'audio/wav', 'audio/x-wav'];\n\nconst item = $input.first();\nconst headers = item.json.headers || {};\nconst body = item.json.body || {};\nconst requestId = String(headers['x-request-id'] || $execution.id).slice(0, 80);\n// One session = one conversation. The page sends the same id for every turn of a call.\nconst sessionId = String(headers['x-session-id'] || body.sessionId || '').replace(/[^\\w.-]/g, '').slice(0, 80) || `req-${requestId}`;\n// Fault injection for tests. Only sessions named test-* can use it, so callers can't trigger it.\nconst simulate = sessionId.startsWith('test-') ? String(headers['x-simulate-failure'] || '').toLowerCase() : '';\nconst base = { requestId, sessionId, simulate, startedAt: Date.now() };\nconst reject = (error, extra = {}) => [{ json: { ...base, ok: false, status: 400, error, ...extra } }];\n\nconst bin = item.binary && item.binary.audio;\nconst typed = String(body.message || '').trim().slice(0, 1000);\nif (!bin && typed) return [{ json: { ...base, ok: true, needsStt: false, callerText: typed, bytes: 0, mimeType: 'text/plain' } }];\nif (!bin) return reject('No recording received. Send it as a form field named \"audio\", or type a \"message\".');\n\nconst mimeType = (bin.mimeType || '').split(';')[0].trim().toLowerCase();\nconst bytes = (await this.helpers.getBinaryDataBuffer(0, 'audio')).length;\n\nif (bytes < MIN_BYTES) return reject(`The recording is empty or too short (${bytes} bytes). Speak for at least a second.`, { bytes, mimeType });\nif (bytes > MAX_BYTES) return reject(`The recording is ${(bytes / 1048576).toFixed(1)} MB. The limit is 5 MB.`, { bytes, mimeType });\nif (!ALLOWED.includes(mimeType)) return reject(`Audio type \"${mimeType || 'unknown'}\" isn't supported. Send webm, mp4/m4a, ogg, mp3 or wav.`, { bytes, mimeType });\n\nreturn [{ json: { ...base, ok: true, needsStt: true, bytes, mimeType }, binary: item.binary }];\n"
+      },
+      "notes": "Recording or typed message. Rejects bad input before anything costs money."
+    },
+    {
+      "name": "Request OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "Request OK?",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "New request?",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        300
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "rowNotExists",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "UCyU48d9L1hJWBQU"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "requestId",
+              "condition": "eq",
+              "keyValue": "={{ $json.requestId }}"
+            },
+            {
+              "keyName": "outcome",
+              "condition": "eq",
+              "keyValue": "answered"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Seen before?",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        100
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "rowExists",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "UCyU48d9L1hJWBQU"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "requestId",
+              "condition": "eq",
+              "keyValue": "={{ $json.requestId }}"
+            },
+            {
+              "keyName": "outcome",
+              "condition": "eq",
+              "keyValue": "answered"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Earlier answer",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        100
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "UCyU48d9L1hJWBQU"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "requestId",
+              "condition": "eq",
+              "keyValue": "={{ $('Validate request').first().json.requestId }}"
+            },
+            {
+              "keyName": "outcome",
+              "condition": "eq",
+              "keyValue": "answered"
+            }
+          ]
+        },
+        "returnAll": false,
+        "limit": 1
+      }
+    },
+    {
+      "name": "Replay answer",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1100,
+        100
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "Replay answer-reply",
+              "name": "reply",
+              "type": "string",
+              "value": "={{ $json.replyText }}"
+            },
+            {
+              "id": "Replay answer-route",
+              "name": "route",
+              "type": "string",
+              "value": "replay"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Needs speech-to-text?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        880,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "Needs speech-to-text?",
+              "leftValue": "={{ $json.needsStt }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Transcribe",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1100,
+        400
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "s6WqOAvpvAngAnwG"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      }
+    },
+    {
+      "name": "Heard it?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        400
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "Heard it?",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Receptionist",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1320,
+        220
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "Egcia0CYC3eQKd1X"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "callerText": "={{ $json.text ?? $json.callerText }}",
+            "sessionId": "={{ $('Validate request').first().json.sessionId }}",
+            "requestId": "={{ $('Validate request').first().json.requestId }}",
+            "simulate": "={{ $('Validate request').first().json.simulate }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "callerText",
+              "displayName": "callerText",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "sessionId",
+              "displayName": "sessionId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "requestId",
+              "displayName": "requestId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "simulate",
+              "displayName": "simulate",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Reply to speak",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1540,
+        300
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "Reply to speak-reply",
+              "name": "reply",
+              "type": "string",
+              "value": "={{ $json.reply }}"
+            },
+            {
+              "id": "Reply to speak-route",
+              "name": "route",
+              "type": "string",
+              "value": "={{ $json.route }}"
+            },
+            {
+              "id": "Reply to speak-alerted",
+              "name": "alerted",
+              "type": "boolean",
+              "value": "={{ $json.alerted === true }}"
+            },
+            {
+              "id": "Reply to speak-callerText",
+              "name": "callerText",
+              "type": "string",
+              "value": "={{ $json.callerText ?? '' }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Speak",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1760,
+        300
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "uyhRqwKpX5BDdJna"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "reply": "={{ $json.reply }}",
+            "sessionId": "={{ $('Validate request').first().json.sessionId }}",
+            "simulate": "={{ $('Validate request').first().json.simulate }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "reply",
+              "displayName": "reply",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "sessionId",
+              "displayName": "sessionId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "simulate",
+              "displayName": "simulate",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Got audio?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1980,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "Got audio?",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Reply with audio",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        2200,
+        200
+      ],
+      "parameters": {
+        "respondWith": "binary",
+        "responseDataSource": "set",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "X-Request-Id",
+                "value": "={{ $('Validate request').first().json.requestId }}"
+              },
+              {
+                "name": "X-Session-Id",
+                "value": "={{ $('Validate request').first().json.sessionId }}"
+              },
+              {
+                "name": "X-Route",
+                "value": "={{ $('Reply to speak').first().json.route }}"
+              },
+              {
+                "name": "X-Reply-Text",
+                "value": "={{ encodeURIComponent($('Reply to speak').first().json.reply) }}"
+              },
+              {
+                "name": "X-Transcript",
+                "value": "={{ encodeURIComponent($('Reply to speak').first().json.callerText) }}"
+              },
+              {
+                "name": "X-Alerted",
+                "value": "={{ $('Reply to speak').first().json.alerted ? 'true' : 'false' }}"
+              },
+              {
+                "name": "Access-Control-Expose-Headers",
+                "value": "X-Request-Id, X-Session-Id, X-Route, X-Reply-Text, X-Transcript, X-Degraded, X-Alerted"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "Reply with text",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        2200,
+        400
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ reply: $('Reply to speak').first().json.reply, route: $('Reply to speak').first().json.route, audio: false, requestId: $('Validate request').first().json.requestId }) }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "X-Request-Id",
+                "value": "={{ $('Validate request').first().json.requestId }}"
+              },
+              {
+                "name": "X-Session-Id",
+                "value": "={{ $('Validate request').first().json.sessionId }}"
+              },
+              {
+                "name": "X-Route",
+                "value": "={{ $('Reply to speak').first().json.route }}"
+              },
+              {
+                "name": "X-Reply-Text",
+                "value": "={{ encodeURIComponent($('Reply to speak').first().json.reply) }}"
+              },
+              {
+                "name": "X-Degraded",
+                "value": "tts"
+              },
+              {
+                "name": "X-Alerted",
+                "value": "={{ $json.alerted ? 'true' : 'false' }}"
+              },
+              {
+                "name": "Access-Control-Expose-Headers",
+                "value": "X-Request-Id, X-Session-Id, X-Route, X-Reply-Text, X-Transcript, X-Degraded, X-Alerted"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "Reply with error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1320,
+        600
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: $json.error, requestId: $('Validate request').first().json.requestId }) }}",
+        "options": {
+          "responseCode": "={{ $json.status || 502 }}"
+        }
+      }
+    },
+    {
+      "name": "Log row",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2420,
+        400
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "Log row-requestId",
+              "name": "requestId",
+              "type": "string",
+              "value": "={{ $('Validate request').first().json.requestId }}"
+            },
+            {
+              "id": "Log row-sessionId",
+              "name": "sessionId",
+              "type": "string",
+              "value": "={{ $('Validate request').first().json.sessionId }}"
+            },
+            {
+              "id": "Log row-route",
+              "name": "route",
+              "type": "string",
+              "value": "={{ ($('Reply to speak').isExecuted ? $('Reply to speak').first().json.route : 'rejected') }}"
+            },
+            {
+              "id": "Log row-outcome",
+              "name": "outcome",
+              "type": "string",
+              "value": "={{ $('Reply with audio').isExecuted ? 'answered' : $('Reply with text').isExecuted ? 'answered-text-only' : 'rejected' }}"
+            },
+            {
+              "id": "Log row-httpStatus",
+              "name": "httpStatus",
+              "type": "number",
+              "value": "={{ $('Reply with error').isExecuted ? ($('Validate request').first().json.status || 502) : 200 }}"
+            },
+            {
+              "id": "Log row-audioBytes",
+              "name": "audioBytes",
+              "type": "number",
+              "value": "={{ $('Validate request').first().json.bytes ?? 0 }}"
+            },
+            {
+              "id": "Log row-mimeType",
+              "name": "mimeType",
+              "type": "string",
+              "value": "={{ $('Validate request').first().json.mimeType ?? '' }}"
+            },
+            {
+              "id": "Log row-transcriptChars",
+              "name": "transcriptChars",
+              "type": "number",
+              "value": "={{ ($('Reply to speak').isExecuted ? $('Reply to speak').first().json.callerText : '').length }}"
+            },
+            {
+              "id": "Log row-replyChars",
+              "name": "replyChars",
+              "type": "number",
+              "value": "={{ ($('Reply to speak').isExecuted ? $('Reply to speak').first().json.reply : '').length }}"
+            },
+            {
+              "id": "Log row-totalMs",
+              "name": "totalMs",
+              "type": "number",
+              "value": "={{ Date.now() - $('Validate request').first().json.startedAt }}"
+            },
+            {
+              "id": "Log row-error",
+              "name": "error",
+              "type": "string",
+              "value": "={{ $('Reply with error').isExecuted ? ($('Validate request').first().json.error || 'could not transcribe') : $('Reply with text').isExecuted ? 'TTS failed' : '' }}"
+            },
+            {
+              "id": "Log row-replyText",
+              "name": "replyText",
+              "type": "string",
+              "value": "={{ ($('Reply to speak').isExecuted ? $('Reply to speak').first().json.reply : '') }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Log request",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        2640,
+        400
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "insert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "UCyU48d9L1hJWBQU"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "requestId",
+              "displayName": "requestId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sessionId",
+              "displayName": "sessionId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "route",
+              "displayName": "route",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "outcome",
+              "displayName": "outcome",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "httpStatus",
+              "displayName": "httpStatus",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "audioBytes",
+              "displayName": "audioBytes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "mimeType",
+              "displayName": "mimeType",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "transcriptChars",
+              "displayName": "transcriptChars",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "replyChars",
+              "displayName": "replyChars",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "totalMs",
+              "displayName": "totalMs",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "error",
+              "displayName": "error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "replyText",
+              "displayName": "replyText",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Voice request": {
+      "main": [
+        [
+          {
+            "node": "Validate request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate request": {
+      "main": [
+        [
+          {
+            "node": "Request OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Request OK?": {
+      "main": [
+        [
+          {
+            "node": "New request?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Seen before?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reply with error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Seen before?": {
+      "main": [
+        [
+          {
+            "node": "Earlier answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Earlier answer": {
+      "main": [
+        [
+          {
+            "node": "Replay answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Replay answer": {
+      "main": [
+        [
+          {
+            "node": "Reply to speak",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "New request?": {
+      "main": [
+        [
+          {
+            "node": "Needs speech-to-text?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs speech-to-text?": {
+      "main": [
+        [
+          {
+            "node": "Transcribe",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Receptionist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transcribe": {
+      "main": [
+        [
+          {
+            "node": "Heard it?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Heard it?": {
+      "main": [
+        [
+          {
+            "node": "Receptionist",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reply with error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Receptionist": {
+      "main": [
+        [
+          {
+            "node": "Reply to speak",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reply to speak": {
+      "main": [
+        [
+          {
+            "node": "Speak",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Speak": {
+      "main": [
+        [
+          {
+            "node": "Got audio?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Got audio?": {
+      "main": [
+        [
+          {
+            "node": "Reply with audio",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reply with text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reply with audio": {
+      "main": [
+        [
+          {
+            "node": "Log row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reply with text": {
+      "main": [
+        [
+          {
+            "node": "Log row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reply with error": {
+      "main": [
+        [
+          {
+            "node": "Log row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log row": {
+      "main": [
+        [
+          {
+            "node": "Log request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {}
+}

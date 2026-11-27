@@ -1,0 +1,15 @@
+title: Northgate · Voice Loop
+[frame: n-voice-overview]
+This is the Voice Loop, the front door of the Northgate Physio voice receptionist. It has nineteen steps and hands the heavy work to three sub-workflows. Let's open the important ones.
+[frame: n-voice-webhook]
+Voice request is a webhook that accepts a POST on the path northgate-voice. It answers through separate Respond steps, so the workflow decides exactly what goes back to the caller. The address is hidden here. Authentication is off while testing, and a header key goes back on before real use.
+[frame: n-voice-validate]
+Validate request is a Code step. Its first lines set the rules: a five megabyte limit, a minimum size so silence is rejected, and the list of audio formats it accepts. Anything outside those rules is turned away before speech to text or the AI is called, so bad requests cost nothing.
+[frame: n-voice-seen-before]
+Seen before checks the request log, a data table, for a row with the same request id that was already answered. If one exists, the earlier answer is replayed. That's how a retried request never books twice.
+[frame: n-voice-receptionist-call]
+Receptionist is an Execute Workflow step that calls the Receptionist sub-workflow. Its inputs are mapped one by one: the caller's text, the session id for memory, the request id, and a simulate flag that only tests use.
+[frame: n-voice-reply-audio]
+Reply with audio sends the spoken answer back as a binary file, from the data field that the Speak sub-workflow returns. Its response headers carry the transcript and the reply text, so the recorder page can show them.
+[frame: n-voice-log-row]
+Log row builds one record per request: the request and session ids, the route, the outcome, timings and the reply text. That record feeds the request log behind replays and reporting.

@@ -1,0 +1,15 @@
+title: Northgate · Agent tools
+[frame: n-tools-overview]
+Agent tools are three small web services that share one diary: check availability, book, and cancel. Both the n8n receptionist and the ElevenLabs voice agent use them.
+[frame: n-tools-check-webhook]
+Each service starts with a webhook. Check availability takes a POST on the path northgate tools, check availability. The address is hidden here.
+[frame: n-tools-free-times]
+Work out free times is a Code step. The clinic's rules live at the top in one object: the time zone, the three therapists, opening hours for each weekday with Sunday closed, and a thirty day booking window.
+[frame: n-tools-decide-booking]
+Decide booking applies the same rules before anything is saved. It refuses closed days and taken slots, and it refuses a second booking for the same phone at the same time.
+[frame: n-tools-race]
+Did we win the slot runs after saving. Its comments explain the rule: two callers can pass the check at the same moment, so it reads the day again, and the booking saved first keeps the slot.
+[frame: n-tools-undo]
+Undo our booking is a data table update. It marks the losing booking as cancelled, matching on its row id, and that caller is offered the nearest free times.
+[frame: n-tools-decide-cancel]
+Decide cancellation only cancels when the caller's phone number matches the booking, so nobody can cancel someone else's appointment.

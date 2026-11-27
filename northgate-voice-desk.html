@@ -1,0 +1,344 @@
+<title>Northgate Voice Desk</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a workflow canvas. Missions are nodes on a dot grid, joined by one connector running top to bottom. */
+:root {
+  --canvas: #f2f4f1; --dot: #d3d9d4; --panel: #ffffff; --ink: #16201b; --muted: #58645e;
+  --line: #c8d0ca; --accent: #0f766e; --accent-soft: #d8efeb; --twist: #a8520a; --twist-soft: #fbeedb;
+  --done: #15803d;
+  --f-display: "Bricolage Grotesque", "Avenir Next", system-ui, sans-serif;
+  --f-body: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --canvas: #111614; --dot: #222b27; --panel: #19201d; --ink: #e5ece8; --muted: #9ba8a2;
+  --line: #2f3a35; --accent: #2dd4bf; --accent-soft: #10332f; --twist: #f5a524; --twist-soft: #362711; --done: #4ade80;
+  color-scheme: dark } }
+:root[data-theme="dark"] {
+  --canvas: #111614; --dot: #222b27; --panel: #19201d; --ink: #e5ece8; --muted: #9ba8a2;
+  --line: #2f3a35; --accent: #2dd4bf; --accent-soft: #10332f; --twist: #f5a524; --twist-soft: #362711; --done: #4ade80;
+  color-scheme: dark }
+
+* { box-sizing: border-box; }
+body {
+  background: var(--canvas);
+  background-image: radial-gradient(var(--dot) 1.2px, transparent 1.2px);
+  background-size: 22px 22px;
+  color: var(--ink); font: 15px/1.6 var(--f-body);
+}
+.wrap { max-width: 940px; margin: 0 auto; padding-block: 40px 80px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+h1, h2, h3 { font-family: var(--f-display); text-wrap: balance; margin: 0; line-height: 1.15; }
+h1 { font-size: clamp(34px, 6vw, 56px); font-weight: 800; letter-spacing: -0.02em; }
+h2 { font-size: 24px; font-weight: 800; }
+h3 { font-size: 15px; font-weight: 600; font-family: var(--f-body); }
+p { margin: 0; }
+.eyebrow { font: 500 12px/1 var(--f-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+.mono { font-family: var(--f-mono); font-size: 13px; }
+.muted { color: var(--muted); }
+
+header { display: grid; gap: 14px; margin-bottom: 32px; }
+header .lede { max-width: 64ch; font-size: 17px; color: var(--muted); }
+
+.brief { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 22px; display: grid; gap: 18px; margin-bottom: 18px; }
+.brief-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px 28px; }
+.brief-grid > div { min-width: 0; display: grid; gap: 6px; align-content: start; }
+.brief ul { margin: 0; padding-left: 18px; }
+.brief li + li { margin-top: 3px; }
+.kpis { display: flex; flex-wrap: wrap; gap: 10px; }
+.kpi { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; min-width: 0; }
+.kpi b { display: block; font: 600 18px/1.2 var(--f-mono); font-variant-numeric: tabular-nums; color: var(--accent); }
+.kpi span { font-size: 12px; color: var(--muted); }
+
+.progress { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--canvas);
+  border-bottom: 1px solid var(--line); padding-block: 12px; margin-bottom: 26px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--canvas); }
+.bar { flex: 1 1 200px; height: 8px; background: var(--line); border-radius: 99px; overflow: hidden; }
+.bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+.progress .mono { font-variant-numeric: tabular-nums; }
+button.reset { font: 500 12px var(--f-mono); background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+button.reset:hover { color: var(--ink); border-color: var(--muted); }
+button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* the connector */
+.flow { position: relative; display: grid; gap: 26px; padding-left: 34px; }
+.flow::before { content: ""; position: absolute; left: 11px; top: 18px; bottom: 18px; width: 2px; background: var(--line); }
+.node { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; min-width: 0; }
+.node::before { content: ""; position: absolute; left: -29px; top: 22px; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--panel); border: 2px solid var(--line); }
+.node.complete::before { background: var(--done); border-color: var(--done); }
+.node.complete { border-color: color-mix(in srgb, var(--done) 45%, var(--line)); }
+.node summary { list-style: none; cursor: pointer; padding: 16px 20px; display: grid; grid-template-columns: auto 1fr auto; gap: 4px 14px; align-items: center; }
+.node summary::-webkit-details-marker { display: none; }
+.step { font: 500 12px var(--f-mono); color: var(--accent); background: var(--accent-soft); border-radius: 5px; padding: 3px 7px; }
+.node summary h2 { font-size: 19px; min-width: 0; }
+.count { font: 500 12px var(--f-mono); color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.node summary .goal { grid-column: 2 / -1; color: var(--muted); font-size: 14px; }
+.body { padding: 0 20px 20px; display: grid; gap: 18px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font: 400 12px var(--f-mono); border: 1px solid var(--line); border-radius: 99px; padding: 2px 9px; color: var(--muted); }
+.tasks { display: grid; gap: 8px; }
+.task { display: grid; grid-template-columns: 20px 1fr; gap: 10px; align-items: start; cursor: pointer; }
+.task input { width: 16px; height: 16px; margin: 3px 0 0; accent-color: var(--accent); cursor: pointer; }
+.task span { min-width: 0; }
+.task input:checked + span { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--line); }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 14px; }
+.box { border-radius: 8px; padding: 12px 14px; min-width: 0; display: grid; gap: 4px; align-content: start; }
+.box .eyebrow { font-size: 11px; }
+.box.test { border: 1px dashed var(--line); }
+.box.twist { background: var(--twist-soft); }
+.box.twist .eyebrow { color: var(--twist); }
+.box.habit { background: var(--accent-soft); }
+pre { margin: 0; background: var(--canvas); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; overflow-x: auto; font: 12.5px/1.5 var(--f-mono); }
+code { font-family: var(--f-mono); font-size: .92em; }
+
+.final { margin-top: 30px; background: var(--ink); color: var(--canvas); border-radius: 10px; padding: 24px; display: grid; gap: 14px; }
+.final .eyebrow { color: var(--canvas); opacity: .7; }
+.final ul { margin: 0; padding-left: 18px; }
+.final li + li { margin-top: 4px; }
+.rules { margin-top: 18px; display: grid; gap: 10px; }
+.rules ol { margin: 0; padding-left: 20px; }
+.rules li + li { margin-top: 4px; }
+
+@media (max-width: 520px) {
+  .flow { padding-left: 24px; } .flow::before { left: 6px; } .node::before { left: -24px; }
+  .node summary { grid-template-columns: 1fr auto; } .node summary .step { grid-column: 1 / -1; justify-self: start; }
+  .node summary .goal { grid-column: 1 / -1; }
+}
+@media (prefers-reduced-motion: reduce) { .bar i { transition: none; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <span class="eyebrow">Practice engagement · n8n + ElevenLabs</span>
+    <h1>Northgate Voice Desk</h1>
+    <p class="lede">A fictional client hires you to turn your Record → n8n → Play prototype into a voice receptionist they can run their clinic on. Work through seven missions the way a paid engagement runs: brief, build, client change requests, hardening, handover. Each mission ends with a test you can show someone.</p>
+  </header>
+
+  <section class="brief" aria-labelledby="brief-h">
+    <span class="eyebrow">The client brief</span>
+    <h2 id="brief-h">Northgate Physio, three therapists, one overloaded front desk</h2>
+    <div class="brief-grid">
+      <div>
+        <h3>The problem</h3>
+        <p class="muted">They take 60–90 calls a day. About a quarter are missed at lunch and after 17:00. Most missed calls are bookings, reschedules and "are you open Saturday?"</p>
+      </div>
+      <div>
+        <h3>What they want</h3>
+        <ul class="muted">
+          <li>A voice assistant that answers clinic questions</li>
+          <li>Books, moves and cancels appointments</li>
+          <li>Sends reminders and a morning summary to staff</li>
+          <li>Hands anything urgent to a human, never guesses</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Constraints</h3>
+        <ul class="muted">
+          <li>Store only name, phone and appointment time. No medical notes.</li>
+          <li>Symptoms like chest pain get a fixed safety script, not an AI answer.</li>
+          <li>No surprise bills: they approve any paid service first.</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Your stack</h3>
+        <p class="muted">n8n, ElevenLabs Speech to Text and Text to Speech (later ElevenLabs Agents), one LLM inside the AI Agent node, Google Sheets or Postgres for the diary, Telegram or Slack for staff alerts.</p>
+      </div>
+    </div>
+    <div class="kpis" aria-label="Success targets">
+      <div class="kpi"><b>≥ 80%</b><span>booking requests done without a human</span></div>
+      <div class="kpi"><b>&lt; 4 s</b><span>reply time per turn in your loop</span></div>
+      <div class="kpi"><b>0</b><span>double bookings</span></div>
+      <div class="kpi"><b>$0.15</b><span>target cost per call</span></div>
+    </div>
+  </section>
+
+  <div class="progress" role="status">
+    <span class="eyebrow">Progress</span>
+    <div class="bar" aria-hidden="true"><i id="bar"></i></div>
+    <span class="mono" id="overall">0 / 0 tasks</span>
+    <button class="reset" id="reset" type="button">Clear ticks</button>
+  </div>
+
+  <div class="flow" id="flow"></div>
+
+  <section class="final">
+    <span class="eyebrow">Mission 8 · Close the engagement</span>
+    <h2>Turn it into proof you can sell</h2>
+    <ul>
+      <li>One-page case study: problem, architecture diagram, the four targets above with your measured numbers.</li>
+      <li>A short demo video: a booking by voice, a failure handled, the staff alert arriving.</li>
+      <li>Public repo with sanitised workflow JSON, <code>.env.example</code> and the README. No keys, no real phone numbers.</li>
+      <li>Three proposal openers for real job posts, each pointing at the part of this build that matches their problem.</li>
+    </ul>
+  </section>
+
+  <section class="rules">
+    <span class="eyebrow">House rules for every mission</span>
+    <ol class="muted">
+      <li>Write the acceptance test before you build. If you can't say how you'll prove it works, you haven't understood the task.</li>
+      <li>Name nodes by what they do: <code>STT · ElevenLabs</code>, not <code>HTTP Request1</code>.</li>
+      <li>Keys live in n8n credentials or environment variables, never pasted into a node's URL or body.</li>
+      <li>Export the workflow JSON and commit it at the end of each mission, with a message saying what changed.</li>
+      <li>When a client twist lands, write a one-line reply to the "client" first, then build.</li>
+    </ol>
+  </section>
+</div>
+
+<script>
+const MISSIONS = [
+  { title: "Harden the voice loop", goal: "Your prototype works. Make it safe to put on the clinic's iPad.",
+    skills: ["Webhook binary data", "Respond to Webhook", "Header Auth", "IF validation", "HTTP status codes"],
+    tasks: [
+      "Set the Webhook to respond with a Respond to Webhook node and return the TTS audio as audio/mpeg",
+      "Protect the webhook with a Header Auth credential and send the header from your recorder page",
+      "Reject a missing, empty or over-5 MB recording with a 400 and a JSON error message",
+      "Log every request to a sheet or table: time, total milliseconds, transcript length, outcome",
+      "Rename every node by what it does"
+    ],
+    test: "A request without the key gets 401/403. An empty file gets 400. A normal recording plays back in under 4 s, and the log has a row for each.",
+    code: 'curl -i -X POST "$WEBHOOK_URL" -F "audio=@empty.webm"\ncurl -i -X POST "$WEBHOOK_URL" -H "X-Desk-Key: $KEY" -F "audio=@hello.webm"',
+    twist: "\"Our iPad uses Safari.\" Safari records audio/mp4, not webm. Prove your STT step accepts both, with one test file of each.",
+    habit: "Pin a real recording on the Webhook trigger so you can debug without re-recording." },
+
+  { title: "Give it a brain", goal: "Replace the echo with an agent that knows the diary and can book.",
+    skills: ["AI Agent node", "System prompt", "Chat memory", "Agent tools", "Sheets or Postgres"],
+    tasks: [
+      "Create the diary: a slots table (date, time, therapist, status) and a bookings table",
+      "Build an AI Agent with four tools: check availability, create booking, cancel booking, clinic FAQ",
+      "Send a sessionId from the page and key the chat memory on it so a conversation spans turns",
+      "Put the system prompt in one Set node so it is easy to find and change",
+      "Add a guardrail before the agent: urgent-symptom words return the fixed safety script and alert staff"
+    ],
+    test: "A five-turn spoken conversation books a real slot and the slot shows as taken. Saying \"I have chest pain\" returns the safety script and never reaches the agent.",
+    twist: "\"It booked Dr. Amina on her day off.\" Add each therapist's working days to the availability tool and prove it with a test request for that day.",
+    habit: "Tools return small, flat JSON with only what the model needs. Never hand it whole rows." },
+
+  { title: "Make it fail well", goal: "Things will break at 17:30 on a Friday. The caller and the staff should both know what happened.",
+    skills: ["Error Trigger", "Retry On Fail", "Timeouts", "Error output branch", "Idempotency"],
+    tasks: [
+      "Build an error workflow that posts the workflow name, failing node and execution link to the staff channel",
+      "Set it as the error workflow in the main workflow's settings",
+      "Turn on Retry On Fail for the ElevenLabs and LLM calls and give them a timeout",
+      "If TTS fails, return JSON text so the page shows the reply instead of silence",
+      "Accept a requestId and make a repeated request return the first result instead of booking again"
+    ],
+    test: "Break the ElevenLabs key on purpose: the caller still gets a text reply and staff get an alert. Send the same requestId twice: one booking.",
+    twist: "Two callers grab the last 09:00 slot at the same moment. Re-check the slot's status at write time and reply with the next free slots if it was just taken.",
+    habit: "No workflow goes live without an error workflow attached." },
+
+  { title: "Split into sub-workflows", goal: "One giant canvas is hard to test and impossible to reuse. Break it into parts.",
+    skills: ["Execute Workflow", "Sub-workflow trigger inputs", "Pinned data", "Reuse"],
+    tasks: [
+      "Extract Transcribe, Speak and Booking into sub-workflows with defined inputs",
+      "Shrink the main workflow to a short orchestrator that fits on one screen",
+      "Pin realistic input on each sub-workflow trigger and run each one alone"
+    ],
+    test: "Each sub-workflow runs on its own from pinned data, and the main workflow still passes every Mission 1–3 test.",
+    twist: "\"Can patients book by Telegram text too?\" Add a Telegram trigger that calls the same Booking sub-workflow. No copied nodes.",
+    habit: "If you copy a group of nodes twice, it should be a sub-workflow." },
+
+  { title: "Run the back office", goal: "The parts nobody calls in for: reminders, summaries, reports.",
+    skills: ["Schedule Trigger", "Loop Over Items", "Wait", "Rate limits", "Filters"],
+    tasks: [
+      "07:30 every day: send staff a summary of today's bookings",
+      "18:00 every day: send reminders for tomorrow's appointments with a reply option to cancel",
+      "Handle the cancel reply with a second webhook that frees the slot",
+      "Weekly report from your Mission 1 log: calls, bookings, handoffs, average reply time",
+      "Set the instance timezone so 07:30 means 07:30 at the clinic"
+    ],
+    test: "With 40 fake bookings, all 40 reminders go out without rate-limit errors, and a cancel reply frees the right slot.",
+    twist: "\"Don't remind people who booked less than 24 hours ago.\" Add the filter and prove it with two test bookings either side of the line.",
+    habit: "Use the Code node only when built-in nodes can't do it, and leave a comment saying why." },
+
+  { title: "Go real-time with ElevenLabs Agents", goal: "Record-then-send feels like a walkie-talkie. Try a live voice agent and compare honestly.",
+    skills: ["ElevenLabs Agents", "Server tools → n8n webhooks", "Tool parameter schemas", "Latency"],
+    tasks: [
+      "Create an ElevenLabs agent with the clinic prompt and a voice the client likes",
+      "Expose check availability and create booking as n8n webhooks and register them as the agent's server tools",
+      "Secure the tool webhooks with a secret header, and keep them fast: no LLM call inside a tool",
+      "Write a half-page recommendation comparing your loop and the live agent on speed, cost and effort to maintain"
+    ],
+    test: "Book a slot by talking to the agent in ElevenLabs' test widget, and find the matching tool execution in n8n.",
+    twist: "\"We want a real phone number.\" Research the telephony options, estimate the monthly cost, and send it for approval. Don't buy anything.",
+    habit: "Measure before you recommend. Put real numbers from your own executions in the write-up." },
+
+  { title: "Ship it like a professional", goal: "Make it something another person can run, fix and trust.",
+    skills: ["Docker Compose", "Postgres", "Environment variables", "Git export", "Staging vs production", "Docs"],
+    tasks: [
+      "Run n8n with Docker Compose and Postgres, with N8N_ENCRYPTION_KEY, WEBHOOK_URL and GENERIC_TIMEZONE set",
+      "Set execution data pruning so the database doesn't grow forever",
+      "Export every workflow to JSON and commit it to git",
+      "Keep separate staging and production credentials",
+      "Write the README: architecture diagram, setup steps, credentials list, runbook for the three likeliest failures",
+      "Build a cost sheet: STT minutes, TTS characters and LLM tokens per average call"
+    ],
+    code: "docker compose up -d\ndocker compose exec n8n n8n export:workflow --all --separate --output=/backup/workflows",
+    test: "Someone else restores the whole system from your repo and .env.example by following only the README.",
+    twist: "\"Calls cost more than we expected.\" Cache the audio for your ten most common replies and show the before and after cost per call.",
+    habit: "Every change goes to staging first. Production only gets exported, committed workflows." }
+];
+
+const KEY = "northgate-voice-desk-v1";
+let state = {};
+try { state = JSON.parse(localStorage.getItem(KEY) || "{}"); } catch (e) { state = {}; }
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} };
+const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+const flow = document.getElementById("flow");
+flow.innerHTML = MISSIONS.map((m, i) => {
+  const n = i + 1;
+  return `<details class="node" id="m${n}" ${n === 1 ? "open" : ""}>
+    <summary>
+      <span class="step">Mission ${n}</span>
+      <h2>${esc(m.title)}</h2>
+      <span class="count" data-count="${n}"></span>
+      <p class="goal">${esc(m.goal)}</p>
+    </summary>
+    <div class="body">
+      <div class="chips">${m.skills.map(s => `<span class="chip">${esc(s)}</span>`).join("")}</div>
+      <div class="tasks">${m.tasks.map((t, j) => {
+        const id = `m${n}-t${j + 1}`;
+        return `<label class="task" for="${id}"><input type="checkbox" id="${id}" ${state[id] ? "checked" : ""}><span>${esc(t)}</span></label>`;
+      }).join("")}</div>
+      ${m.code ? `<pre>${esc(m.code)}</pre>` : ""}
+      <div class="cols">
+        <div class="box test"><span class="eyebrow">Done when</span><p>${esc(m.test)}</p></div>
+        <div class="box twist"><span class="eyebrow">Client twist</span><p>${esc(m.twist)}</p></div>
+        <div class="box habit"><span class="eyebrow">Pro habit</span><p>${esc(m.habit)}</p></div>
+      </div>
+    </div>
+  </details>`;
+}).join("");
+
+function refresh() {
+  let done = 0, total = 0;
+  MISSIONS.forEach((m, i) => {
+    const n = i + 1;
+    const d = m.tasks.filter((_, j) => state[`m${n}-t${j + 1}`]).length;
+    done += d; total += m.tasks.length;
+    document.querySelector(`[data-count="${n}"]`).textContent = `${d} / ${m.tasks.length}`;
+    document.getElementById(`m${n}`).classList.toggle("complete", d === m.tasks.length);
+  });
+  document.getElementById("overall").textContent = `${done} / ${total} tasks`;
+  document.getElementById("bar").style.width = total ? (100 * done / total) + "%" : "0";
+}
+
+flow.addEventListener("change", e => {
+  if (e.target.type !== "checkbox") return;
+  state[e.target.id] = e.target.checked; save(); refresh();
+});
+
+const resetBtn = document.getElementById("reset");
+let armed = false;
+resetBtn.addEventListener("click", () => {
+  if (!armed) { armed = true; resetBtn.textContent = "Click again to clear"; setTimeout(() => { armed = false; resetBtn.textContent = "Clear ticks"; }, 3000); return; }
+  state = {}; save();
+  flow.querySelectorAll("input[type=checkbox]").forEach(c => { c.checked = false; });
+  armed = false; resetBtn.textContent = "Clear ticks"; refresh();
+});
+
+refresh();
+</script>

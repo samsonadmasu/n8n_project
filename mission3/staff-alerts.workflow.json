@@ -1,0 +1,391 @@
+{
+  "name": "Northgate · Staff alerts",
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Africa/Addis_Ababa"
+  },
+  "nodes": [
+    {
+      "name": "Workflow crashed",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "name": "Crash details",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "Crash detailskind",
+              "name": "kind",
+              "type": "string",
+              "value": "crash"
+            },
+            {
+              "id": "Crash detailsworkflow",
+              "name": "workflow",
+              "type": "string",
+              "value": "={{ $json.workflow.name }}"
+            },
+            {
+              "id": "Crash detailsnode",
+              "name": "node",
+              "type": "string",
+              "value": "={{ $json.execution.lastNodeExecuted }}"
+            },
+            {
+              "id": "Crash detailsmessage",
+              "name": "message",
+              "type": "string",
+              "value": "={{ $json.execution.error.message }}"
+            },
+            {
+              "id": "Crash detailsexecutionUrl",
+              "name": "executionUrl",
+              "type": "string",
+              "value": "={{ $json.execution.url }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Called by a workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        240
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "name": "Handled details",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        240
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "Handled detailskind",
+              "name": "kind",
+              "type": "string",
+              "value": "handled"
+            },
+            {
+              "id": "Handled detailsworkflow",
+              "name": "workflow",
+              "type": "string",
+              "value": "={{ $json.workflow }}"
+            },
+            {
+              "id": "Handled detailsnode",
+              "name": "node",
+              "type": "string",
+              "value": "={{ $json.node }}"
+            },
+            {
+              "id": "Handled detailsmessage",
+              "name": "message",
+              "type": "string",
+              "value": "={{ $json.message }}"
+            },
+            {
+              "id": "Handled detailsexecutionUrl",
+              "name": "executionUrl",
+              "type": "string",
+              "value": "={{ $json.executionUrl }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Alert",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        440,
+        120
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "Alertkind",
+              "name": "kind",
+              "type": "string",
+              "value": "={{ $json.kind }}"
+            },
+            {
+              "id": "Alertworkflow",
+              "name": "workflow",
+              "type": "string",
+              "value": "={{ $json.workflow }}"
+            },
+            {
+              "id": "Alertnode",
+              "name": "node",
+              "type": "string",
+              "value": "={{ $json.node }}"
+            },
+            {
+              "id": "Alertmessage",
+              "name": "message",
+              "type": "string",
+              "value": "={{ $json.message }}"
+            },
+            {
+              "id": "AlertexecutionUrl",
+              "name": "executionUrl",
+              "type": "string",
+              "value": "={{ $json.executionUrl }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Push to staff",
+      "type": "n8n-nodes-base.pushover",
+      "typeVersion": 1,
+      "position": [
+        660,
+        120
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "pushoverApi": {
+          "id": "pp3yCOVmIMvUchRz",
+          "name": "Pushover account"
+        }
+      },
+      "parameters": {
+        "resource": "message",
+        "operation": "push",
+        "userKey": "<your Pushover user key>",
+        "priority": 0,
+        "message": "={{ $json.workflow }} · {{ $json.node }}\n{{ $json.message }}",
+        "additionalFields": {
+          "title": "={{ $json.kind === 'crash' ? 'Northgate: workflow crashed' : 'Northgate: degraded reply' }}",
+          "url": "={{ $json.executionUrl }}",
+          "url_title": "Open execution"
+        }
+      }
+    },
+    {
+      "name": "Log alert",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        120
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "insert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "4UZ90DANIZJdfkjw"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "kind": "={{ $('Alert').item.json.kind }}",
+            "workflow": "={{ $('Alert').item.json.workflow }}",
+            "node": "={{ $('Alert').item.json.node }}",
+            "message": "={{ $('Alert').item.json.message }}",
+            "executionUrl": "={{ $('Alert').item.json.executionUrl }}",
+            "pushed": "={{ $json.status === 1 ? 'yes' : 'no: ' + ($json.error?.message || 'unknown') }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "kind",
+              "displayName": "kind",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "workflow",
+              "displayName": "workflow",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "node",
+              "displayName": "node",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "message",
+              "displayName": "message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "executionUrl",
+              "displayName": "executionUrl",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "pushed",
+              "displayName": "pushed",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Alerted",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1100,
+        120
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "Alertedalerted",
+              "name": "alerted",
+              "type": "string",
+              "value": "true"
+            },
+            {
+              "id": "Alertedpushed",
+              "name": "pushed",
+              "type": "string",
+              "value": "={{ $json.pushed }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Workflow crashed": {
+      "main": [
+        [
+          {
+            "node": "Crash details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Crash details": {
+      "main": [
+        [
+          {
+            "node": "Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Called by a workflow": {
+      "main": [
+        [
+          {
+            "node": "Handled details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handled details": {
+      "main": [
+        [
+          {
+            "node": "Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert": {
+      "main": [
+        [
+          {
+            "node": "Push to staff",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Push to staff": {
+      "main": [
+        [
+          {
+            "node": "Log alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log alert": {
+      "main": [
+        [
+          {
+            "node": "Alerted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

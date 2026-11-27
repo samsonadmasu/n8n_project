@@ -1,0 +1,678 @@
+{
+  "name": "Northgate · Receptionist",
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Africa/Addis_Ababa",
+    "errorWorkflow": "IirH2iDy25qNBr69"
+  },
+  "nodes": [
+    {
+      "name": "Caller said",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "inputSource": "workflowInputs",
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "callerText",
+              "type": "string"
+            },
+            {
+              "name": "sessionId",
+              "type": "string"
+            },
+            {
+              "name": "requestId",
+              "type": "string"
+            },
+            {
+              "name": "simulate",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Check for emergencies",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Guardrail: runs BEFORE the AI agent. Anything that sounds like an emergency gets a fixed,\n// reviewed safety script. The LLM never improvises on these.\nconst URGENT = [\n  /chest pain/i, /heart attack/i, /stroke/i,\n  /can'?t breathe|cannot breathe|trouble breathing|difficulty breathing|short(ness)? of breath|struggling to breathe/i,\n  /unconscious|passed out|fainted|not responding/i,\n  /heavy bleeding|bleeding (a lot|heavily|badly)|won'?t stop bleeding/i,\n  /hit (my|his|her|their) head|head injury|fell .*head/i,\n  /suicid|kill myself|overdose/i,\n];\nconst callerText = String($input.first().json.callerText || '').trim();\nconst matched = URGENT.find(r => r.test(callerText));\nreturn [{ json: { callerText, urgent: Boolean(matched), matched: matched ? String(matched) : '' } }];\n"
+      },
+      "notes": "Fixed safety script for emergencies. The LLM never sees these."
+    },
+    {
+      "name": "Emergency?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1540,
+        200
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "Emergency?",
+              "leftValue": "={{ $json.urgent }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Safety script",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1760,
+        60
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "Safety script-reply",
+              "name": "reply",
+              "type": "string",
+              "value": "This sounds like it could be an emergency. Please hang up now and call your local emergency number. If you can't, ask someone near you to call for you."
+            },
+            {
+              "id": "Safety script-route",
+              "name": "route",
+              "type": "string",
+              "value": "urgent"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Receptionist prompt",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1760,
+        300
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "Receptionist prompt-systemPrompt",
+              "name": "systemPrompt",
+              "type": "string",
+              "value": "=You are the voice receptionist for Northgate Physio, a physiotherapy clinic. Today is {{ $now.setZone('Africa/Addis_Ababa').toFormat('cccc d LLLL yyyy') }} ({{ $now.setZone('Africa/Addis_Ababa').toISODate() }}). The clinic's time zone is Africa/Addis_Ababa.\n\nYour reply is spoken aloud. Use at most three short sentences, plain words, no lists, no markdown, no emoji. Say times like \"two p.m.\" and dates like \"Wednesday the second of December\".\n\nFacts: use the clinic_faq tool for any question about the clinic, such as opening hours, therapists, what to bring or cancellation notice. Never invent facts. If clinic_faq doesn't cover it, say a member of staff will call back.\n\nBooking:\n- Work out dates as YYYY-MM-DD from today's date.\n- Call check_availability before offering times, and offer at most three.\n- create_booking needs the date, the time in 24-hour HH:MM, the caller's full name and phone number. If the caller has already given all of these clearly, book straight away. Otherwise ask only for what is missing.\n- Only say an appointment is booked if create_booking returns booked true. Then give the therapist, day, time and reference.\n\nCancelling:\n- cancel_booking needs the caller's phone number and the date, plus the time if they have more than one booking that day. Use what the caller already told you earlier in the conversation.\n- Only say it is cancelled if cancel_booking returns cancelled true.\n\nIf a tool returns booked false or cancelled false, explain its message briefly and offer what it suggests.\nNever give medical advice and never ask about symptoms or medical history. Only collect name and phone number.\n"
+            },
+            {
+              "id": "Receptionist prompt-callerText",
+              "name": "callerText",
+              "type": "string",
+              "value": "={{ $json.callerText }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Receptionist agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        1980,
+        300
+      ],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.callerText }}",
+        "needsFallback": true,
+        "options": {
+          "systemMessage": "={{ $json.systemPrompt }}"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 500,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "name": "OpenAI model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        1820,
+        560
+      ],
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Caller said').first().json.simulate === 'agent' ? 'simulated-broken-model' : 'gpt-4.1-mini' }}"
+        },
+        "options": {
+          "temperature": 0.3
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "tmHPFKBeRyUYHskh",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "name": "Gemini fallback",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        1700,
+        560
+      ],
+      "parameters": {
+        "options": {},
+        "modelName": "={{ $('Caller said').first().json.simulate === 'agent' ? 'models/simulated-broken-model' : 'models/gemini-3-flash-preview' }}"
+      },
+      "credentials": {
+        "googlePalmApi": {
+          "id": "Gq9VWEHrCD8soKLO",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "name": "Conversation memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        1940,
+        560
+      ],
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Caller said').first().json.sessionId }}",
+        "contextWindowLength": 10
+      }
+    },
+    {
+      "name": "check_availability",
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.2,
+      "position": [
+        2060,
+        560
+      ],
+      "parameters": {
+        "toolDescription": "Get the free appointment start times at Northgate Physio for one date. Call before offering any times.",
+        "method": "POST",
+        "url": "https://YOUR-N8N-INSTANCE.app.n8n.cloud/webhook/northgate-tools/check-availability",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ date: $fromAI('date', 'The date in YYYY-MM-DD format', 'string'), therapist: $fromAI('therapist', 'Amina, Daniel or Sara. Empty string when the caller has no preference', 'string', '') }) }}",
+        "options": {
+          "timeout": 8000
+        }
+      }
+    },
+    {
+      "name": "create_booking",
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.2,
+      "position": [
+        2180,
+        560
+      ],
+      "parameters": {
+        "toolDescription": "Book an appointment. Needs the date, a free time, the caller's full name and phone number.",
+        "method": "POST",
+        "url": "https://YOUR-N8N-INSTANCE.app.n8n.cloud/webhook/northgate-tools/create-booking",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ date: $fromAI('date', 'The date in YYYY-MM-DD format', 'string'), time: $fromAI('time', 'Start time in 24-hour HH:MM', 'string'), therapist: $fromAI('therapist', 'Amina, Daniel or Sara. Empty string when the caller has no preference', 'string', ''), patientName: $fromAI('patientName', 'The caller full name', 'string'), phone: $fromAI('phone', 'The caller phone number, digits with optional leading +', 'string'), source: 'voice-loop' }) }}",
+        "options": {
+          "timeout": 8000
+        }
+      }
+    },
+    {
+      "name": "cancel_booking",
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.2,
+      "position": [
+        2300,
+        560
+      ],
+      "parameters": {
+        "toolDescription": "Cancel the caller's appointment. Needs their phone number and the date; add the time if they have more than one booking that day.",
+        "method": "POST",
+        "url": "https://YOUR-N8N-INSTANCE.app.n8n.cloud/webhook/northgate-tools/cancel-booking",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ phone: $fromAI('phone', 'The caller phone number, digits with optional leading +', 'string'), date: $fromAI('date', 'The date of the appointment in YYYY-MM-DD format', 'string'), time: $fromAI('time', 'Start time in 24-hour HH:MM, or empty string if not known', 'string', '') }) }}",
+        "options": {
+          "timeout": 8000
+        }
+      }
+    },
+    {
+      "name": "clinic_faq",
+      "type": "@n8n/n8n-nodes-langchain.toolCode",
+      "typeVersion": 1.3,
+      "position": [
+        2420,
+        560
+      ],
+      "parameters": {
+        "description": "Facts about Northgate Physio: opening hours, therapists, appointment length, booking window, what to bring, cancellation notice, prices.",
+        "language": "javaScript",
+        "jsCode": "// clinic_faq tool. The agent calls this for any question about the clinic.\n// Only facts listed here may be told to callers. Anything else: staff call back.\nreturn [\n  'Opening hours: Monday to Friday 9 a.m. to 5 p.m., last appointment starts at 4 p.m. Saturday 9 a.m. to 1 p.m., last appointment starts at 12 noon. Closed on Sunday.',\n  'Therapists: Amina, Daniel and Sara.',\n  'Appointments last 45 minutes and start on the hour.',\n  'Bookings can be made from tomorrow up to 30 days ahead, by phone or with this assistant.',\n  'Please bring comfortable clothes you can move in, and any scans or referral letters.',\n  'Please give at least 24 hours notice to cancel or move an appointment.',\n  'Prices, insurance and anything not listed here: a member of staff will call the caller back.',\n].join('\\n');\n"
+      }
+    },
+    {
+      "name": "Agent reply",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2260,
+        300
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "Agent reply-reply",
+              "name": "reply",
+              "type": "string",
+              "value": "={{ $json.output }}"
+            },
+            {
+              "id": "Agent reply-route",
+              "name": "route",
+              "type": "string",
+              "value": "agent"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Agent alert",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2260,
+        480
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "Agent alert-workflow",
+              "name": "workflow",
+              "type": "string",
+              "value": "Northgate · Receptionist"
+            },
+            {
+              "id": "Agent alert-node",
+              "name": "node",
+              "type": "string",
+              "value": "Receptionist agent"
+            },
+            {
+              "id": "Agent alert-message",
+              "name": "message",
+              "type": "string",
+              "value": "=The receptionist agent failed: {{ ($json.error && ($json.error.message || $json.error)) || 'unknown error' }} (session {{ $('Caller said').first().json.sessionId }})"
+            },
+            {
+              "id": "Agent alert-executionUrl",
+              "name": "executionUrl",
+              "type": "string",
+              "value": "=https://YOUR-N8N-INSTANCE.app.n8n.cloud/workflow/{{ $workflow.id }}/executions/{{ $execution.id }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Tell staff (Agent)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        2480,
+        480
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "IirH2iDy25qNBr69"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "name": "Fallback apology",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2700,
+        480
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "Fallback apology-reply",
+              "name": "reply",
+              "type": "string",
+              "value": "Sorry, I'm having trouble with the booking system right now. A member of staff will call you back shortly."
+            },
+            {
+              "id": "Fallback apology-route",
+              "name": "route",
+              "type": "string",
+              "value": "fallback"
+            },
+            {
+              "id": "Fallback apology-alerted",
+              "name": "alerted",
+              "type": "boolean",
+              "value": "={{ !$json.error }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Result",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        3000,
+        300
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "Result-reply",
+              "name": "reply",
+              "type": "string",
+              "value": "={{ $json.reply }}"
+            },
+            {
+              "id": "Result-route",
+              "name": "route",
+              "type": "string",
+              "value": "={{ $json.route }}"
+            },
+            {
+              "id": "Result-alerted",
+              "name": "alerted",
+              "type": "boolean",
+              "value": "={{ $json.alerted === true }}"
+            },
+            {
+              "id": "Result-callerText",
+              "name": "callerText",
+              "type": "string",
+              "value": "={{ $('Caller said').first().json.callerText }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Caller said": {
+      "main": [
+        [
+          {
+            "node": "Check for emergencies",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check for emergencies": {
+      "main": [
+        [
+          {
+            "node": "Emergency?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Emergency?": {
+      "main": [
+        [
+          {
+            "node": "Safety script",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Receptionist prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Safety script": {
+      "main": [
+        [
+          {
+            "node": "Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Receptionist prompt": {
+      "main": [
+        [
+          {
+            "node": "Receptionist agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Receptionist agent": {
+      "main": [
+        [
+          {
+            "node": "Agent reply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Agent alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent reply": {
+      "main": [
+        [
+          {
+            "node": "Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Receptionist agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini fallback": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Receptionist agent",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Conversation memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Receptionist agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check_availability": {
+      "ai_tool": [
+        [
+          {
+            "node": "Receptionist agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "create_booking": {
+      "ai_tool": [
+        [
+          {
+            "node": "Receptionist agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "cancel_booking": {
+      "ai_tool": [
+        [
+          {
+            "node": "Receptionist agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "clinic_faq": {
+      "ai_tool": [
+        [
+          {
+            "node": "Receptionist agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent alert": {
+      "main": [
+        [
+          {
+            "node": "Tell staff (Agent)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tell staff (Agent)": {
+      "main": [
+        [
+          {
+            "node": "Fallback apology",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fallback apology": {
+      "main": [
+        [
+          {
+            "node": "Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {
+    "Caller said": [
+      {
+        "json": {
+          "callerText": "Are you open on Saturdays?",
+          "sessionId": "pinned-demo",
+          "requestId": "pinned-demo",
+          "simulate": ""
+        }
+      }
+    ]
+  }
+}

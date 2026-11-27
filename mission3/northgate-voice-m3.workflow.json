@@ -1,0 +1,1838 @@
+{
+  "name": "Northgate · Voice Loop",
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timezone": "Africa/Addis_Ababa",
+    "errorWorkflow": "IirH2iDy25qNBr69"
+  },
+  "nodes": [
+    {
+      "name": "Voice request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "northgate-voice",
+        "authentication": "none",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "webhookId": "333f6c8b-dba0-43d1-9dab-dd47fcc3b03d"
+    },
+    {
+      "name": "Validate request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Cheap checks first: every rejected request here costs nothing downstream.\n// Accepts a recording (form field \"audio\") or a typed turn (form field \"message\").\nconst MAX_BYTES = 5 * 1024 * 1024;   // ~5 minutes of speech\nconst MIN_BYTES = 1000;              // shorter than this is silence or a broken recording\nconst ALLOWED = ['audio/webm', 'video/webm', 'audio/mp4', 'audio/x-m4a', 'audio/m4a', 'audio/aac', 'audio/ogg', 'audio/mpeg', 'audio/wav', 'audio/x-wav'];\n\nconst item = $input.first();\nconst headers = item.json.headers || {};\nconst body = item.json.body || {};\nconst requestId = String(headers['x-request-id'] || $execution.id).slice(0, 80);\n// One session = one conversation. The page sends the same id for every turn of a call.\nconst sessionId = String(headers['x-session-id'] || body.sessionId || '').replace(/[^\\w.-]/g, '').slice(0, 80) || `req-${requestId}`;\n// Fault injection for tests. Only sessions named test-* can use it, so callers can't trigger it.\nconst simulate = sessionId.startsWith('test-') ? String(headers['x-simulate-failure'] || '').toLowerCase() : '';\nconst base = { requestId, sessionId, simulate, startedAt: Date.now() };\nconst reject = (error, extra = {}) => [{ json: { ...base, ok: false, status: 400, error, ...extra } }];\n\nconst bin = item.binary && item.binary.audio;\nconst typed = String(body.message || '').trim().slice(0, 1000);\nif (!bin && typed) return [{ json: { ...base, ok: true, needsStt: false, callerText: typed, bytes: 0, mimeType: 'text/plain' } }];\nif (!bin) return reject('No recording received. Send it as a form field named \"audio\", or type a \"message\".');\n\nconst mimeType = (bin.mimeType || '').split(';')[0].trim().toLowerCase();\nconst bytes = (await this.helpers.getBinaryDataBuffer(0, 'audio')).length;\n\nif (bytes < MIN_BYTES) return reject(`The recording is empty or too short (${bytes} bytes). Speak for at least a second.`, { bytes, mimeType });\nif (bytes > MAX_BYTES) return reject(`The recording is ${(bytes / 1048576).toFixed(1)} MB. The limit is 5 MB.`, { bytes, mimeType });\nif (!ALLOWED.includes(mimeType)) return reject(`Audio type \"${mimeType || 'unknown'}\" isn't supported. Send webm, mp4/m4a, ogg, mp3 or wav.`, { bytes, mimeType });\n\nreturn [{ json: { ...base, ok: true, needsStt: true, bytes, mimeType }, binary: item.binary }];\n"
+      },
+      "notes": "Recording or typed message. Rejects bad input before anything costs money."
+    },
+    {
+      "name": "Request OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "Request OK?",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Needs speech-to-text?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        780,
+        200
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "Needs speech-to-text?",
+              "leftValue": "={{ $json.needsStt }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "STT · ElevenLabs",
+      "type": "@elevenlabs/n8n-nodes-elevenlabs.elevenLabs",
+      "typeVersion": 1,
+      "position": [
+        1000,
+        100
+      ],
+      "parameters": {
+        "resource": "speech",
+        "operation": "speechToText",
+        "file": "audio",
+        "additionalOptions": {},
+        "requestOptions": {}
+      },
+      "credentials": {
+        "elevenLabsApi": {
+          "id": "SvCckO55wBkLq7Iz",
+          "name": "ElevenLabs account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "name": "Use transcript",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1220,
+        100
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "Use transcript-callerText",
+              "name": "callerText",
+              "type": "string",
+              "value": "={{ $json.text }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Check for emergencies",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        200
+      ],
+      "parameters": {
+        "jsCode": "// Guardrail: runs BEFORE the AI agent. Anything that sounds like an emergency gets a fixed,\n// reviewed safety script. The LLM never improvises on these.\nconst URGENT = [\n  /chest pain/i, /heart attack/i, /stroke/i,\n  /can'?t breathe|cannot breathe|trouble breathing|difficulty breathing|short(ness)? of breath|struggling to breathe/i,\n  /unconscious|passed out|fainted|not responding/i,\n  /heavy bleeding|bleeding (a lot|heavily|badly)|won'?t stop bleeding/i,\n  /hit (my|his|her|their) head|head injury|fell .*head/i,\n  /suicid|kill myself|overdose/i,\n];\nconst callerText = String($input.first().json.callerText || '').trim();\nconst matched = URGENT.find(r => r.test(callerText));\nreturn [{ json: { callerText, urgent: Boolean(matched), matched: matched ? String(matched) : '' } }];\n"
+      },
+      "notes": "Fixed safety script for emergencies. The LLM never sees these."
+    },
+    {
+      "name": "Emergency?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1540,
+        200
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "Emergency?",
+              "leftValue": "={{ $json.urgent }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Safety script",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1760,
+        60
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "Safety script-reply",
+              "name": "reply",
+              "type": "string",
+              "value": "This sounds like it could be an emergency. Please hang up now and call your local emergency number. If you can't, ask someone near you to call for you."
+            },
+            {
+              "id": "Safety script-route",
+              "name": "route",
+              "type": "string",
+              "value": "urgent"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Receptionist prompt",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1760,
+        300
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "Receptionist prompt-systemPrompt",
+              "name": "systemPrompt",
+              "type": "string",
+              "value": "=You are the voice receptionist for Northgate Physio, a physiotherapy clinic. Today is {{ $now.setZone('Africa/Addis_Ababa').toFormat('cccc d LLLL yyyy') }} ({{ $now.setZone('Africa/Addis_Ababa').toISODate() }}). The clinic's time zone is Africa/Addis_Ababa.\n\nYour reply is spoken aloud. Use at most three short sentences, plain words, no lists, no markdown, no emoji. Say times like \"two p.m.\" and dates like \"Wednesday the second of December\".\n\nFacts: use the clinic_faq tool for any question about the clinic, such as opening hours, therapists, what to bring or cancellation notice. Never invent facts. If clinic_faq doesn't cover it, say a member of staff will call back.\n\nBooking:\n- Work out dates as YYYY-MM-DD from today's date.\n- Call check_availability before offering times, and offer at most three.\n- create_booking needs the date, the time in 24-hour HH:MM, the caller's full name and phone number. If the caller has already given all of these clearly, book straight away. Otherwise ask only for what is missing.\n- Only say an appointment is booked if create_booking returns booked true. Then give the therapist, day, time and reference.\n\nCancelling:\n- cancel_booking needs the caller's phone number and the date, plus the time if they have more than one booking that day. Use what the caller already told you earlier in the conversation.\n- Only say it is cancelled if cancel_booking returns cancelled true.\n\nIf a tool returns booked false or cancelled false, explain its message briefly and offer what it suggests.\nNever give medical advice and never ask about symptoms or medical history. Only collect name and phone number.\n"
+            },
+            {
+              "id": "Receptionist prompt-callerText",
+              "name": "callerText",
+              "type": "string",
+              "value": "={{ $json.callerText }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Receptionist agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        1980,
+        300
+      ],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.callerText }}",
+        "needsFallback": true,
+        "options": {
+          "systemMessage": "={{ $json.systemPrompt }}"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 500,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "name": "Gemini fallback",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        1700,
+        560
+      ],
+      "parameters": {
+        "options": {},
+        "modelName": "={{ $('Validate request').item.json.simulate === 'agent' ? 'models/simulated-broken-model' : 'models/gemini-3-flash-preview' }}"
+      },
+      "credentials": {
+        "googlePalmApi": {
+          "id": "Gq9VWEHrCD8soKLO",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "name": "OpenAI model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        1820,
+        560
+      ],
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Validate request').item.json.simulate === 'agent' ? 'simulated-broken-model' : 'gpt-4.1-mini' }}"
+        },
+        "options": {
+          "temperature": 0.3
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "tmHPFKBeRyUYHskh",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "name": "Conversation memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        1940,
+        560
+      ],
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Validate request').item.json.sessionId }}",
+        "contextWindowLength": 10
+      }
+    },
+    {
+      "name": "check_availability",
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.2,
+      "position": [
+        2060,
+        560
+      ],
+      "parameters": {
+        "toolDescription": "Get the free appointment start times at Northgate Physio for one date. Call before offering any times.",
+        "method": "POST",
+        "url": "https://YOUR-N8N-INSTANCE.app.n8n.cloud/webhook/northgate-tools/check-availability",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ date: $fromAI('date', 'The date in YYYY-MM-DD format', 'string'), therapist: $fromAI('therapist', 'Amina, Daniel or Sara. Empty string when the caller has no preference', 'string', '') }) }}",
+        "options": {
+          "timeout": 8000
+        }
+      }
+    },
+    {
+      "name": "create_booking",
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.2,
+      "position": [
+        2180,
+        560
+      ],
+      "parameters": {
+        "toolDescription": "Book an appointment. Needs the date, a free time, the caller's full name and phone number.",
+        "method": "POST",
+        "url": "https://YOUR-N8N-INSTANCE.app.n8n.cloud/webhook/northgate-tools/create-booking",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ date: $fromAI('date', 'The date in YYYY-MM-DD format', 'string'), time: $fromAI('time', 'Start time in 24-hour HH:MM', 'string'), therapist: $fromAI('therapist', 'Amina, Daniel or Sara. Empty string when the caller has no preference', 'string', ''), patientName: $fromAI('patientName', 'The caller full name', 'string'), phone: $fromAI('phone', 'The caller phone number, digits with optional leading +', 'string'), source: 'voice-loop' }) }}",
+        "options": {
+          "timeout": 8000
+        }
+      }
+    },
+    {
+      "name": "cancel_booking",
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.2,
+      "position": [
+        2300,
+        560
+      ],
+      "parameters": {
+        "toolDescription": "Cancel the caller's appointment. Needs their phone number and the date; add the time if they have more than one booking that day.",
+        "method": "POST",
+        "url": "https://YOUR-N8N-INSTANCE.app.n8n.cloud/webhook/northgate-tools/cancel-booking",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ phone: $fromAI('phone', 'The caller phone number, digits with optional leading +', 'string'), date: $fromAI('date', 'The date of the appointment in YYYY-MM-DD format', 'string'), time: $fromAI('time', 'Start time in 24-hour HH:MM, or empty string if not known', 'string', '') }) }}",
+        "options": {
+          "timeout": 8000
+        }
+      }
+    },
+    {
+      "name": "clinic_faq",
+      "type": "@n8n/n8n-nodes-langchain.toolCode",
+      "typeVersion": 1.3,
+      "position": [
+        2420,
+        560
+      ],
+      "parameters": {
+        "description": "Facts about Northgate Physio: opening hours, therapists, appointment length, booking window, what to bring, cancellation notice, prices.",
+        "language": "javaScript",
+        "jsCode": "// clinic_faq tool. The agent calls this for any question about the clinic.\n// Only facts listed here may be told to callers. Anything else: staff call back.\nreturn [\n  'Opening hours: Monday to Friday 9 a.m. to 5 p.m., last appointment starts at 4 p.m. Saturday 9 a.m. to 1 p.m., last appointment starts at 12 noon. Closed on Sunday.',\n  'Therapists: Amina, Daniel and Sara.',\n  'Appointments last 45 minutes and start on the hour.',\n  'Bookings can be made from tomorrow up to 30 days ahead, by phone or with this assistant.',\n  'Please bring comfortable clothes you can move in, and any scans or referral letters.',\n  'Please give at least 24 hours notice to cancel or move an appointment.',\n  'Prices, insurance and anything not listed here: a member of staff will call the caller back.',\n].join('\\n');\n"
+      }
+    },
+    {
+      "name": "Agent reply",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2260,
+        300
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "Agent reply-reply",
+              "name": "reply",
+              "type": "string",
+              "value": "={{ $json.output }}"
+            },
+            {
+              "id": "Agent reply-route",
+              "name": "route",
+              "type": "string",
+              "value": "agent"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Reply to speak",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2480,
+        200
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "Reply to speak-reply",
+              "name": "reply",
+              "type": "string",
+              "value": "={{ $json.reply }}"
+            },
+            {
+              "id": "Reply to speak-route",
+              "name": "route",
+              "type": "string",
+              "value": "={{ $json.route }}"
+            },
+            {
+              "id": "Reply to speak-alerted",
+              "name": "alerted",
+              "type": "boolean",
+              "value": "={{ $json.alerted === true }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "TTS · ElevenLabs",
+      "type": "@elevenlabs/n8n-nodes-elevenlabs.elevenLabs",
+      "typeVersion": 1,
+      "position": [
+        2700,
+        200
+      ],
+      "parameters": {
+        "resource": "speech",
+        "text": "={{ $json.reply }}",
+        "voice": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Validate request').item.json.simulate === 'tts' ? 'simulated-broken-voice' : 'CwhRBWXzGAHq8TQ4Fs17' }}"
+        },
+        "additionalOptions": {},
+        "requestOptions": {}
+      },
+      "credentials": {
+        "elevenLabsApi": {
+          "id": "SvCckO55wBkLq7Iz",
+          "name": "ElevenLabs account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 500,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "name": "Reply with audio",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        2920,
+        200
+      ],
+      "parameters": {
+        "respondWith": "binary",
+        "responseDataSource": "set",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "X-Request-Id",
+                "value": "={{ $('Validate request').item.json.requestId }}"
+              },
+              {
+                "name": "X-Session-Id",
+                "value": "={{ $('Validate request').item.json.sessionId }}"
+              },
+              {
+                "name": "X-Route",
+                "value": "={{ $('Reply to speak').item.json.route }}"
+              },
+              {
+                "name": "X-Reply-Text",
+                "value": "={{ encodeURIComponent($('Reply to speak').item.json.reply) }}"
+              },
+              {
+                "name": "X-Transcript",
+                "value": "={{ encodeURIComponent(($('Check for emergencies').isExecuted ? $('Check for emergencies').item.json.callerText : '')) }}"
+              },
+              {
+                "name": "X-Alerted",
+                "value": "={{ $('Reply to speak').item.json.alerted ? 'true' : 'false' }}"
+              },
+              {
+                "name": "Access-Control-Expose-Headers",
+                "value": "X-Request-Id, X-Session-Id, X-Route, X-Reply-Text, X-Transcript, X-Degraded, X-Alerted"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "Reply with error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        660,
+        480
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: $json.error, requestId: $json.requestId }) }}",
+        "options": {
+          "responseCode": "={{ $json.status }}"
+        }
+      }
+    },
+    {
+      "name": "Log row · answered",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        3140,
+        200
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "Log row · answered-requestId",
+              "name": "requestId",
+              "type": "string",
+              "value": "={{ $('Validate request').item.json.requestId }}"
+            },
+            {
+              "id": "Log row · answered-sessionId",
+              "name": "sessionId",
+              "type": "string",
+              "value": "={{ $('Validate request').item.json.sessionId }}"
+            },
+            {
+              "id": "Log row · answered-route",
+              "name": "route",
+              "type": "string",
+              "value": "={{ $('Reply to speak').item.json.route }}"
+            },
+            {
+              "id": "Log row · answered-outcome",
+              "name": "outcome",
+              "type": "string",
+              "value": "answered"
+            },
+            {
+              "id": "Log row · answered-httpStatus",
+              "name": "httpStatus",
+              "type": "number",
+              "value": 200
+            },
+            {
+              "id": "Log row · answered-audioBytes",
+              "name": "audioBytes",
+              "type": "number",
+              "value": "={{ $('Validate request').item.json.bytes }}"
+            },
+            {
+              "id": "Log row · answered-mimeType",
+              "name": "mimeType",
+              "type": "string",
+              "value": "={{ $('Validate request').item.json.mimeType }}"
+            },
+            {
+              "id": "Log row · answered-transcriptChars",
+              "name": "transcriptChars",
+              "type": "number",
+              "value": "={{ ($('Check for emergencies').isExecuted ? $('Check for emergencies').item.json.callerText : '').length }}"
+            },
+            {
+              "id": "Log row · answered-replyChars",
+              "name": "replyChars",
+              "type": "number",
+              "value": "={{ $('Reply to speak').item.json.reply.length }}"
+            },
+            {
+              "id": "Log row · answered-totalMs",
+              "name": "totalMs",
+              "type": "number",
+              "value": "={{ Date.now() - $('Validate request').item.json.startedAt }}"
+            },
+            {
+              "id": "Log row · answered-error",
+              "name": "error",
+              "type": "string",
+              "value": ""
+            },
+            {
+              "id": "Log row · answered-replyText",
+              "name": "replyText",
+              "type": "string",
+              "value": "={{ $('Reply to speak').item.json.reply }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Log row · rejected",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        880,
+        480
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "Log row · rejected-requestId",
+              "name": "requestId",
+              "type": "string",
+              "value": "={{ $('Validate request').item.json.requestId }}"
+            },
+            {
+              "id": "Log row · rejected-sessionId",
+              "name": "sessionId",
+              "type": "string",
+              "value": "={{ $('Validate request').item.json.sessionId }}"
+            },
+            {
+              "id": "Log row · rejected-route",
+              "name": "route",
+              "type": "string",
+              "value": "rejected"
+            },
+            {
+              "id": "Log row · rejected-outcome",
+              "name": "outcome",
+              "type": "string",
+              "value": "rejected"
+            },
+            {
+              "id": "Log row · rejected-httpStatus",
+              "name": "httpStatus",
+              "type": "number",
+              "value": "={{ $('Validate request').item.json.status }}"
+            },
+            {
+              "id": "Log row · rejected-audioBytes",
+              "name": "audioBytes",
+              "type": "number",
+              "value": "={{ $('Validate request').item.json.bytes ?? 0 }}"
+            },
+            {
+              "id": "Log row · rejected-mimeType",
+              "name": "mimeType",
+              "type": "string",
+              "value": "={{ $('Validate request').item.json.mimeType ?? '' }}"
+            },
+            {
+              "id": "Log row · rejected-transcriptChars",
+              "name": "transcriptChars",
+              "type": "number",
+              "value": 0
+            },
+            {
+              "id": "Log row · rejected-replyChars",
+              "name": "replyChars",
+              "type": "number",
+              "value": 0
+            },
+            {
+              "id": "Log row · rejected-totalMs",
+              "name": "totalMs",
+              "type": "number",
+              "value": "={{ Date.now() - $('Validate request').item.json.startedAt }}"
+            },
+            {
+              "id": "Log row · rejected-error",
+              "name": "error",
+              "type": "string",
+              "value": "={{ $('Validate request').item.json.error }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Log request",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        3800,
+        340
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "insert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "UCyU48d9L1hJWBQU"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "requestId",
+              "displayName": "requestId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sessionId",
+              "displayName": "sessionId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "route",
+              "displayName": "route",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "outcome",
+              "displayName": "outcome",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "httpStatus",
+              "displayName": "httpStatus",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "audioBytes",
+              "displayName": "audioBytes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "mimeType",
+              "displayName": "mimeType",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "transcriptChars",
+              "displayName": "transcriptChars",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "replyChars",
+              "displayName": "replyChars",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "totalMs",
+              "displayName": "totalMs",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "error",
+              "displayName": "error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "replyText",
+              "displayName": "replyText",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "New request?",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        560,
+        260
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "rowNotExists",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "UCyU48d9L1hJWBQU"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "requestId",
+              "condition": "eq",
+              "keyValue": "={{ $json.requestId }}"
+            },
+            {
+              "keyName": "outcome",
+              "condition": "eq",
+              "keyValue": "answered"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Seen before?",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        560,
+        60
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "rowExists",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "UCyU48d9L1hJWBQU"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "requestId",
+              "condition": "eq",
+              "keyValue": "={{ $json.requestId }}"
+            },
+            {
+              "keyName": "outcome",
+              "condition": "eq",
+              "keyValue": "answered"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Earlier answer",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        780,
+        60
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "UCyU48d9L1hJWBQU"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "requestId",
+              "condition": "eq",
+              "keyValue": "={{ $('Validate request').item.json.requestId }}"
+            },
+            {
+              "keyName": "outcome",
+              "condition": "eq",
+              "keyValue": "answered"
+            }
+          ]
+        },
+        "returnAll": false,
+        "limit": 1
+      }
+    },
+    {
+      "name": "Replay answer",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1000,
+        60
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "Replay answer-reply",
+              "name": "reply",
+              "type": "string",
+              "value": "={{ $json.replyText }}"
+            },
+            {
+              "id": "Replay answer-route",
+              "name": "route",
+              "type": "string",
+              "value": "replay"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "STT alert",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1220,
+        -120
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "STT alert-workflow",
+              "name": "workflow",
+              "type": "string",
+              "value": "Northgate · Voice Loop"
+            },
+            {
+              "id": "STT alert-node",
+              "name": "node",
+              "type": "string",
+              "value": "STT · ElevenLabs"
+            },
+            {
+              "id": "STT alert-message",
+              "name": "message",
+              "type": "string",
+              "value": "=Speech-to-text failed: {{ ($json.error && ($json.error.message || $json.error)) || 'unknown error' }} (session {{ $('Validate request').item.json.sessionId }})"
+            },
+            {
+              "id": "STT alert-executionUrl",
+              "name": "executionUrl",
+              "type": "string",
+              "value": "=https://YOUR-N8N-INSTANCE.app.n8n.cloud/workflow/{{ $workflow.id }}/executions/{{ $execution.id }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Tell staff (STT)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1440,
+        -120
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "IirH2iDy25qNBr69"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "name": "Reply could not hear",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1660,
+        -120
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "options": {
+          "responseCode": 502
+        },
+        "responseBody": "={{ JSON.stringify({ error: \"Sorry, we couldn't process the recording. Please try again, or type your message.\", requestId: $('Validate request').item.json.requestId }) }}"
+      }
+    },
+    {
+      "name": "Agent alert",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2260,
+        480
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "Agent alert-workflow",
+              "name": "workflow",
+              "type": "string",
+              "value": "Northgate · Voice Loop"
+            },
+            {
+              "id": "Agent alert-node",
+              "name": "node",
+              "type": "string",
+              "value": "Receptionist agent"
+            },
+            {
+              "id": "Agent alert-message",
+              "name": "message",
+              "type": "string",
+              "value": "=The receptionist agent failed: {{ ($json.error && ($json.error.message || $json.error)) || 'unknown error' }} (session {{ $('Validate request').item.json.sessionId }})"
+            },
+            {
+              "id": "Agent alert-executionUrl",
+              "name": "executionUrl",
+              "type": "string",
+              "value": "=https://YOUR-N8N-INSTANCE.app.n8n.cloud/workflow/{{ $workflow.id }}/executions/{{ $execution.id }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Tell staff (Agent)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        2480,
+        480
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "IirH2iDy25qNBr69"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "name": "Fallback apology",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2700,
+        480
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "Fallback apology-reply",
+              "name": "reply",
+              "type": "string",
+              "value": "Sorry, I'm having trouble with the booking system right now. A member of staff will call you back shortly."
+            },
+            {
+              "id": "Fallback apology-route",
+              "name": "route",
+              "type": "string",
+              "value": "fallback"
+            },
+            {
+              "id": "Fallback apology-alerted",
+              "name": "alerted",
+              "type": "boolean",
+              "value": "={{ !$json.error }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "TTS alert",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2920,
+        420
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "TTS alert-workflow",
+              "name": "workflow",
+              "type": "string",
+              "value": "Northgate · Voice Loop"
+            },
+            {
+              "id": "TTS alert-node",
+              "name": "node",
+              "type": "string",
+              "value": "TTS · ElevenLabs"
+            },
+            {
+              "id": "TTS alert-message",
+              "name": "message",
+              "type": "string",
+              "value": "=Text-to-speech failed, caller got text only: {{ ($json.error && ($json.error.message || $json.error)) || 'unknown error' }} (session {{ $('Validate request').item.json.sessionId }})"
+            },
+            {
+              "id": "TTS alert-executionUrl",
+              "name": "executionUrl",
+              "type": "string",
+              "value": "=https://YOUR-N8N-INSTANCE.app.n8n.cloud/workflow/{{ $workflow.id }}/executions/{{ $execution.id }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Tell staff (TTS)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        3140,
+        420
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "IirH2iDy25qNBr69"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "name": "Reply with text",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        3360,
+        420
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ reply: $('Reply to speak').item.json.reply, route: $('Reply to speak').item.json.route, audio: false, requestId: $('Validate request').item.json.requestId }) }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "X-Request-Id",
+                "value": "={{ $('Validate request').item.json.requestId }}"
+              },
+              {
+                "name": "X-Session-Id",
+                "value": "={{ $('Validate request').item.json.sessionId }}"
+              },
+              {
+                "name": "X-Route",
+                "value": "={{ $('Reply to speak').item.json.route }}"
+              },
+              {
+                "name": "X-Reply-Text",
+                "value": "={{ encodeURIComponent($('Reply to speak').item.json.reply) }}"
+              },
+              {
+                "name": "X-Degraded",
+                "value": "tts"
+              },
+              {
+                "name": "X-Alerted",
+                "value": "={{ $json.error ? 'false' : 'true' }}"
+              },
+              {
+                "name": "Access-Control-Expose-Headers",
+                "value": "X-Request-Id, X-Session-Id, X-Route, X-Reply-Text, X-Transcript, X-Degraded, X-Alerted"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "Log row · text only",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        3580,
+        420
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "Log row · text only-requestId",
+              "name": "requestId",
+              "type": "string",
+              "value": "={{ $('Validate request').item.json.requestId }}"
+            },
+            {
+              "id": "Log row · text only-sessionId",
+              "name": "sessionId",
+              "type": "string",
+              "value": "={{ $('Validate request').item.json.sessionId }}"
+            },
+            {
+              "id": "Log row · text only-route",
+              "name": "route",
+              "type": "string",
+              "value": "={{ $('Reply to speak').item.json.route }}"
+            },
+            {
+              "id": "Log row · text only-outcome",
+              "name": "outcome",
+              "type": "string",
+              "value": "answered-text-only"
+            },
+            {
+              "id": "Log row · text only-httpStatus",
+              "name": "httpStatus",
+              "type": "number",
+              "value": 200
+            },
+            {
+              "id": "Log row · text only-audioBytes",
+              "name": "audioBytes",
+              "type": "number",
+              "value": "={{ $('Validate request').item.json.bytes }}"
+            },
+            {
+              "id": "Log row · text only-mimeType",
+              "name": "mimeType",
+              "type": "string",
+              "value": "={{ $('Validate request').item.json.mimeType }}"
+            },
+            {
+              "id": "Log row · text only-transcriptChars",
+              "name": "transcriptChars",
+              "type": "number",
+              "value": "={{ ($('Check for emergencies').isExecuted ? $('Check for emergencies').item.json.callerText : '').length }}"
+            },
+            {
+              "id": "Log row · text only-replyChars",
+              "name": "replyChars",
+              "type": "number",
+              "value": "={{ $('Reply to speak').item.json.reply.length }}"
+            },
+            {
+              "id": "Log row · text only-totalMs",
+              "name": "totalMs",
+              "type": "number",
+              "value": "={{ Date.now() - $('Validate request').item.json.startedAt }}"
+            },
+            {
+              "id": "Log row · text only-error",
+              "name": "error",
+              "type": "string",
+              "value": "TTS failed"
+            },
+            {
+              "id": "Log row · text only-replyText",
+              "name": "replyText",
+              "type": "string",
+              "value": "={{ $('Reply to speak').item.json.reply }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Voice request": {
+      "main": [
+        [
+          {
+            "node": "Validate request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate request": {
+      "main": [
+        [
+          {
+            "node": "Request OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Request OK?": {
+      "main": [
+        [
+          {
+            "node": "New request?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Seen before?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reply with error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs speech-to-text?": {
+      "main": [
+        [
+          {
+            "node": "STT · ElevenLabs",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Check for emergencies",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "STT · ElevenLabs": {
+      "main": [
+        [
+          {
+            "node": "Use transcript",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "STT alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Use transcript": {
+      "main": [
+        [
+          {
+            "node": "Check for emergencies",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check for emergencies": {
+      "main": [
+        [
+          {
+            "node": "Emergency?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Emergency?": {
+      "main": [
+        [
+          {
+            "node": "Safety script",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Receptionist prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Safety script": {
+      "main": [
+        [
+          {
+            "node": "Reply to speak",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Receptionist prompt": {
+      "main": [
+        [
+          {
+            "node": "Receptionist agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Receptionist agent": {
+      "main": [
+        [
+          {
+            "node": "Agent reply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Agent alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent reply": {
+      "main": [
+        [
+          {
+            "node": "Reply to speak",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reply to speak": {
+      "main": [
+        [
+          {
+            "node": "TTS · ElevenLabs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TTS · ElevenLabs": {
+      "main": [
+        [
+          {
+            "node": "Reply with audio",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "TTS alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reply with audio": {
+      "main": [
+        [
+          {
+            "node": "Log row · answered",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reply with error": {
+      "main": [
+        [
+          {
+            "node": "Log row · rejected",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log row · answered": {
+      "main": [
+        [
+          {
+            "node": "Log request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log row · rejected": {
+      "main": [
+        [
+          {
+            "node": "Log request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Receptionist agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini fallback": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Receptionist agent",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Conversation memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Receptionist agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check_availability": {
+      "ai_tool": [
+        [
+          {
+            "node": "Receptionist agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "create_booking": {
+      "ai_tool": [
+        [
+          {
+            "node": "Receptionist agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "cancel_booking": {
+      "ai_tool": [
+        [
+          {
+            "node": "Receptionist agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "clinic_faq": {
+      "ai_tool": [
+        [
+          {
+            "node": "Receptionist agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "New request?": {
+      "main": [
+        [
+          {
+            "node": "Needs speech-to-text?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Seen before?": {
+      "main": [
+        [
+          {
+            "node": "Earlier answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Earlier answer": {
+      "main": [
+        [
+          {
+            "node": "Replay answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Replay answer": {
+      "main": [
+        [
+          {
+            "node": "Reply to speak",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "STT alert": {
+      "main": [
+        [
+          {
+            "node": "Tell staff (STT)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tell staff (STT)": {
+      "main": [
+        [
+          {
+            "node": "Reply could not hear",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent alert": {
+      "main": [
+        [
+          {
+            "node": "Tell staff (Agent)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tell staff (Agent)": {
+      "main": [
+        [
+          {
+            "node": "Fallback apology",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fallback apology": {
+      "main": [
+        [
+          {
+            "node": "Reply to speak",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TTS alert": {
+      "main": [
+        [
+          {
+            "node": "Tell staff (TTS)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tell staff (TTS)": {
+      "main": [
+        [
+          {
+            "node": "Reply with text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reply with text": {
+      "main": [
+        [
+          {
+            "node": "Log row · text only",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log row · text only": {
+      "main": [
+        [
+          {
+            "node": "Log request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

@@ -1,0 +1,15 @@
+title: Northgate · Receptionist
+[frame: n-rec-overview]
+The Receptionist is the brain of the system. It takes what the caller said and returns the reply to speak. Let's open its main steps.
+[frame: n-rec-emergencies]
+Check for emergencies runs before any AI. It's a list of patterns: chest pain, heart attack, stroke, trouble breathing, fainting, heavy bleeding, head injuries and self-harm. A match gets a fixed safety message, never an AI answer.
+[frame: n-rec-prompt]
+Receptionist prompt keeps the system prompt in one place. It inserts today's date in the clinic's time zone, so the agent can turn next Wednesday into a real date. It also sets the rules: short spoken replies, use the tools, and never give medical advice.
+[frame: n-rec-agent]
+The agent takes the caller's text as its prompt. Enable fallback model is switched on, and the side panel confirms it retries on failure and continues to an error path instead of crashing.
+[frame: n-rec-openai]
+The main model is OpenAI with a low temperature of zero point three, for steady answers. The model name is an expression so tests can simulate an outage. Normally it's g p t four point one mini, with Gemini as the fallback.
+[frame: n-rec-create-booking]
+Each tool is an HTTP request the agent can call. Create booking has a plain-language description that tells the agent when to use it, and posts to the booking web service, whose address is hidden here.
+[frame: n-rec-fallback]
+If the agent still fails, Fallback apology sets a safe reply promising a call back, marks the route as fallback, and records whether staff were alerted.

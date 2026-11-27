@@ -1,0 +1,982 @@
+{
+  "name": "Northgate · Agent tools",
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Africa/Addis_Ababa",
+    "saveDataSuccessExecution": "all",
+    "errorWorkflow": "IirH2iDy25qNBr69"
+  },
+  "nodes": [
+    {
+      "name": "Check availability",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "48d52b19-46e4-52d7-a10b-2b764442af98",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "northgate-tools/check-availability",
+        "authentication": "none",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "name": "Bookings that day",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        220,
+        0
+      ],
+      "alwaysOutputData": true,
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "wLHF1O85PJ6QXfGK"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "date",
+              "condition": "eq",
+              "keyValue": "={{ $('Check availability').first().json.body.date || '' }}"
+            }
+          ]
+        },
+        "returnAll": true
+      }
+    },
+    {
+      "name": "Work out free times",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "notes": "Clinic hours and therapists live in CLINIC at the top.",
+      "parameters": {
+        "jsCode": "// Work out free start times for one day. Runs once for all items.\n// Input items: booking rows for the requested date (may be a single empty item).\nconst CLINIC = {\n  tz: 'Africa/Addis_Ababa',\n  therapists: ['Amina', 'Daniel', 'Sara'],\n  // ISO weekday (1 = Monday) -> [first start hour, last start hour]. Sunday missing = closed.\n  hours: { 1: [9, 16], 2: [9, 16], 3: [9, 16], 4: [9, 16], 5: [9, 16], 6: [9, 12] },\n  maxDaysAhead: 30,\n};\nconst out = (httpStatus, reply) => [{ json: { httpStatus, reply } }];\n\nconst body = $('Check availability').first().json.body || {};\nconst date = String(body.date || '').trim();\nconst wanted = String(body.therapist || '').trim();\nif (!date) return out(400, { error: 'date is required, as YYYY-MM-DD.' });\n\nconst day = DateTime.fromISO(date, { zone: CLINIC.tz });\nif (!day.isValid || !/^\\d{4}-\\d{2}-\\d{2}$/.test(date)) return out(400, { error: `\"${date}\" is not a date. Use YYYY-MM-DD.` });\n\nconst today = DateTime.now().setZone(CLINIC.tz).startOf('day');\nconst daysAhead = Math.round(day.startOf('day').diff(today, 'days').days);\nconst weekday = day.toFormat('cccc');\nconst closed = (message) => out(200, { date, weekday, open: false, free: [], message });\n\nif (daysAhead < 1) return closed('We can only book from tomorrow onwards.');\nif (daysAhead > CLINIC.maxDaysAhead) return closed(`We only book up to ${CLINIC.maxDaysAhead} days ahead.`);\nconst range = CLINIC.hours[day.weekday];\nif (!range) return closed(`The clinic is closed on ${weekday}s.`);\n\nlet therapists = CLINIC.therapists;\nif (wanted) {\n  const match = CLINIC.therapists.find(t => t.toLowerCase() === wanted.toLowerCase());\n  if (!match) return out(200, { date, weekday, open: true, free: [], message: `We have no therapist called ${wanted}. Our therapists are ${CLINIC.therapists.join(', ')}.` });\n  therapists = [match];\n}\n\nconst booked = $input.all().map(i => i.json).filter(r => r.date === date && r.status === 'booked');\nconst free = [];\nfor (let h = range[0]; h <= range[1]; h++) {\n  const time = `${String(h).padStart(2, '0')}:00`;\n  const taken = booked.filter(r => r.time === time).map(r => r.therapist);\n  const available = therapists.filter(t => !taken.includes(t));\n  if (available.length) free.push({ time, therapists: available });\n}\n\nreturn out(200, {\n  date, weekday, open: true, therapist: wanted ? therapists[0] : null, free,\n  message: free.length ? `${free.length} start times free on ${weekday} ${date}. Appointments last 45 minutes.` : `Fully booked on ${weekday} ${date}.`,\n});\n"
+      }
+    },
+    {
+      "name": "Reply with times",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.reply) }}",
+        "options": {
+          "responseCode": "={{ $('Work out free times').item.json.httpStatus }}"
+        }
+      }
+    },
+    {
+      "name": "Book appointment",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        320
+      ],
+      "webhookId": "7f5bc67d-6dad-567e-a0d4-6d49e3153909",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "northgate-tools/create-booking",
+        "authentication": "none",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "name": "Bookings that day (re-check)",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        220,
+        320
+      ],
+      "alwaysOutputData": true,
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "wLHF1O85PJ6QXfGK"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "date",
+              "condition": "eq",
+              "keyValue": "={{ $('Book appointment').first().json.body.date || '' }}"
+            }
+          ]
+        },
+        "returnAll": true
+      }
+    },
+    {
+      "name": "Decide booking",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        320
+      ],
+      "notes": "Re-checks the slot against fresh rows right before the insert.",
+      "parameters": {
+        "jsCode": "// Decide whether a booking can go ahead. Runs once for all items.\n// Input items: booking rows for the requested date (may be a single empty item).\n// Output: { book, httpStatus, row?, reply }. The insert only runs when book is true.\nconst CLINIC = {\n  tz: 'Africa/Addis_Ababa',\n  therapists: ['Amina', 'Daniel', 'Sara'],\n  hours: { 1: [9, 16], 2: [9, 16], 3: [9, 16], 4: [9, 16], 5: [9, 16], 6: [9, 12] },\n  maxDaysAhead: 30,\n};\nconst no = (httpStatus, reply) => [{ json: { book: false, httpStatus, reply } }];\n\nconst body = $('Book appointment').first().json.body || {};\nconst date = String(body.date || '').trim();\nlet time = String(body.time || '').trim();\nconst wanted = String(body.therapist || '').trim();\nconst patientName = String(body.patientName || '').trim().slice(0, 80);\nconst phone = String(body.phone || '').replace(/[\\s()-]/g, '');\n\nconst missing = [['date', date], ['time', time], ['patientName', patientName], ['phone', phone]].filter(([, v]) => !v).map(([k]) => k);\nif (missing.length) return no(400, { booked: false, error: `Missing: ${missing.join(', ')}.` });\nif (!/^\\+?\\d{7,15}$/.test(phone)) return no(400, { booked: false, error: `\"${body.phone}\" doesn't look like a phone number.` });\nconst tm = time.match(/^(\\d{1,2}):(\\d{2})$/);\nif (!tm) return no(400, { booked: false, error: `\"${time}\" is not a time. Use HH:MM, 24-hour.` });\ntime = `${tm[1].padStart(2, '0')}:${tm[2]}`;\n\nconst day = DateTime.fromISO(date, { zone: CLINIC.tz });\nif (!day.isValid || !/^\\d{4}-\\d{2}-\\d{2}$/.test(date)) return no(400, { booked: false, error: `\"${date}\" is not a date. Use YYYY-MM-DD.` });\n\nconst today = DateTime.now().setZone(CLINIC.tz).startOf('day');\nconst daysAhead = Math.round(day.startOf('day').diff(today, 'days').days);\nconst weekday = day.toFormat('cccc');\nconst range = CLINIC.hours[day.weekday];\n\nlet therapists = CLINIC.therapists;\nif (wanted) {\n  const match = CLINIC.therapists.find(t => t.toLowerCase() === wanted.toLowerCase());\n  if (!match) return no(200, { booked: false, alternatives: [], message: `We have no therapist called ${wanted}. Our therapists are ${CLINIC.therapists.join(', ')}.` });\n  therapists = [match];\n}\n\nconst booked = $input.all().map(i => i.json).filter(r => r.date === date && r.status === 'booked');\nconst freeAt = (t, who) => who.filter(th => !booked.some(r => r.time === t && r.therapist === th));\nconst slots = range ? Array.from({ length: range[1] - range[0] + 1 }, (_, i) => `${String(range[0] + i).padStart(2, '0')}:00`) : [];\n\n// Up to three nearby options: same time with another therapist first, then other times.\nconst alternatives = () => {\n  const alts = [];\n  if (wanted) freeAt(time, CLINIC.therapists).forEach(th => alts.push({ date, time, therapist: th }));\n  const order = slots.slice().sort((a, b) => Math.abs(parseInt(a) - parseInt(time)) - Math.abs(parseInt(b) - parseInt(time)));\n  for (const t of order) { if (t !== time) { const f = freeAt(t, therapists); if (f.length) alts.push({ date, time: t, therapist: f[0] }); } }\n  return alts.slice(0, 3);\n};\n\nif (daysAhead < 1) return no(200, { booked: false, alternatives: [], message: 'We can only book from tomorrow onwards.' });\nif (daysAhead > CLINIC.maxDaysAhead) return no(200, { booked: false, alternatives: [], message: `We only book up to ${CLINIC.maxDaysAhead} days ahead.` });\nif (!range) return no(200, { booked: false, alternatives: [], message: `The clinic is closed on ${weekday}s.` });\nif (!slots.includes(time)) return no(200, { booked: false, alternatives: alternatives(), message: `Appointments on ${weekday}s start on the hour between ${slots[0]} and ${slots[slots.length - 1]}.` });\n\n// One caller can't be in two appointments at once.\nconst clash = booked.find(r => r.time === time && String(r.phone || '').replace(/[\\s()-]/g, '') === phone);\nif (clash) return no(200, { booked: false, alternatives: [], message: `This phone number already has an appointment at ${time} on ${weekday} ${date} with ${clash.therapist}, reference ${clash.bookingId}.` });\n\nconst free = freeAt(time, therapists);\nif (!free.length) {\n  const who = wanted ? therapists[0] : 'any therapist';\n  return no(200, { booked: false, alternatives: alternatives(), message: `${time} on ${weekday} ${date} is already taken for ${who}.` });\n}\n\nconst therapist = free[0];\nconst bookingId = `NG-${date.replace(/-/g, '').slice(2)}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;\nreturn [{ json: {\n  book: true,\n  httpStatus: 200,\n  row: { bookingId, date, time, therapist, patientName, phone, status: 'booked', source: String(body.source || 'voice-agent').slice(0, 40) },\n  reply: { booked: true, bookingId, date, weekday, time, therapist, message: `Booked with ${therapist} on ${weekday} ${date} at ${time}. Reference ${bookingId}.` },\n} }];\n"
+      }
+    },
+    {
+      "name": "Can book?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        320
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "book",
+              "leftValue": "={{ $json.book }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Save booking",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        220
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "insert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "wLHF1O85PJ6QXfGK"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "bookingId": "={{ $json.row.bookingId }}",
+            "date": "={{ $json.row.date }}",
+            "time": "={{ $json.row.time }}",
+            "therapist": "={{ $json.row.therapist }}",
+            "patientName": "={{ $json.row.patientName }}",
+            "phone": "={{ $json.row.phone }}",
+            "status": "={{ $json.row.status }}",
+            "source": "={{ $json.row.source }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "bookingId",
+              "displayName": "bookingId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "date",
+              "displayName": "date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "time",
+              "displayName": "time",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "therapist",
+              "displayName": "therapist",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "patientName",
+              "displayName": "patientName",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "phone",
+              "displayName": "phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Bookings that day (after save)",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1100,
+        220
+      ],
+      "alwaysOutputData": true,
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "wLHF1O85PJ6QXfGK"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "date",
+              "condition": "eq",
+              "keyValue": "={{ $('Book appointment').first().json.body.date || '' }}"
+            }
+          ]
+        },
+        "returnAll": true
+      }
+    },
+    {
+      "name": "Did we win the slot?",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        220
+      ],
+      "notes": "Two callers, one slot: the row saved first keeps it, later ones undo themselves.",
+      "parameters": {
+        "jsCode": "// Runs right after our booking row is saved, on a fresh read of every booking that day.\n// Two callers can pass the \"is it free?\" check at the same moment and both save a row.\n// Rule: the row saved first (lowest id) keeps the slot; every later one undoes itself.\nconst CLINIC = {\n  tz: 'Africa/Addis_Ababa',\n  therapists: ['Amina', 'Daniel', 'Sara'],\n  hours: { 1: [9, 16], 2: [9, 16], 3: [9, 16], 4: [9, 16], 5: [9, 16], 6: [9, 12] },\n};\nconst mine = $('Decide booking').first().json.row;\nconst all = $input.all().map(i => i.json).filter(r => r.date === mine.date && r.status === 'booked');\nconst sameSlot = all.filter(r => r.time === mine.time && r.therapist === mine.therapist).sort((a, b) => a.id - b.id);\nconst me = sameSlot.find(r => r.bookingId === mine.bookingId);\n\nif (!me || sameSlot[0].bookingId === mine.bookingId) return [{ json: { won: true } }];\n\n// We lost. Offer what is still free, ignoring our own row (it is about to be undone).\nconst taken = all.filter(r => r.bookingId !== mine.bookingId);\nconst isFree = (time, th) => !taken.some(r => r.time === time && r.therapist === th);\nconst day = DateTime.fromISO(mine.date, { zone: CLINIC.tz });\nconst [first, last] = CLINIC.hours[day.weekday] || [9, 16];\nconst hour = parseInt(mine.time, 10);\nconst alternatives = [];\nCLINIC.therapists.filter(th => th !== mine.therapist && isFree(mine.time, th))\n  .forEach(th => alternatives.push({ date: mine.date, time: mine.time, therapist: th }));\nfor (const d of [1, -1, 2, -2, 3, -3]) {\n  const h = hour + d;\n  const t = `${String(h).padStart(2, '0')}:00`;\n  if (h >= first && h <= last && isFree(t, mine.therapist)) alternatives.push({ date: mine.date, time: t, therapist: mine.therapist });\n}\nreturn [{ json: {\n  won: false,\n  undoRowId: me.id,\n  reply: { booked: false, alternatives: alternatives.slice(0, 3),\n           message: `Sorry, ${mine.time} with ${mine.therapist} on ${day.toFormat('cccc')} ${mine.date} was just taken by another caller.` },\n} }];\n"
+      }
+    },
+    {
+      "name": "Won the slot?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1540,
+        220
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "won",
+              "leftValue": "={{ $json.won }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Reply booked",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1760,
+        120
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($('Decide booking').item.json.reply) }}",
+        "options": {
+          "responseCode": "={{ $('Decide booking').item.json.httpStatus }}"
+        }
+      }
+    },
+    {
+      "name": "Undo our booking",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1760,
+        320
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "update",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "wLHF1O85PJ6QXfGK"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $json.undoRowId }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "status": "cancelled"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "bookingId",
+              "displayName": "bookingId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "date",
+              "displayName": "date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "time",
+              "displayName": "time",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "therapist",
+              "displayName": "therapist",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "patientName",
+              "displayName": "patientName",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "phone",
+              "displayName": "phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Reply slot just taken",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1980,
+        320
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($('Did we win the slot?').item.json.reply) }}",
+        "options": {
+          "responseCode": "={{ $('Decide booking').item.json.httpStatus }}"
+        }
+      }
+    },
+    {
+      "name": "Reply not booked",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        880,
+        420
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.reply) }}",
+        "options": {
+          "responseCode": "={{ $('Decide booking').item.json.httpStatus }}"
+        }
+      }
+    },
+    {
+      "name": "Cancel appointment",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        640
+      ],
+      "webhookId": "d97ede53-6780-5fd8-9be6-25d693728317",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "northgate-tools/cancel-booking",
+        "authentication": "none",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "name": "Bookings that day (cancel)",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        220,
+        640
+      ],
+      "alwaysOutputData": true,
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "wLHF1O85PJ6QXfGK"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "date",
+              "condition": "eq",
+              "keyValue": "={{ $('Cancel appointment').first().json.body.date || '' }}"
+            }
+          ]
+        },
+        "returnAll": true
+      }
+    },
+    {
+      "name": "Decide cancellation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        640
+      ],
+      "notes": "Only cancels when the caller's phone matches the booking.",
+      "parameters": {
+        "jsCode": "// Decide which booking to cancel. Runs once for all items.\n// Input items: booking rows for the requested date (may be a single empty item).\n// A booking is only cancelled when the caller's phone matches it, so nobody can cancel someone else's.\n// Output: { cancel, httpStatus, rowId?, reply }. The update only runs when cancel is true.\nconst no = (httpStatus, reply) => [{ json: { cancel: false, httpStatus, reply } }];\nconst normPhone = (p) => String(p || '').replace(/[\\s()-]/g, '');\n\nconst body = $('Cancel appointment').first().json.body || {};\nconst phone = normPhone(body.phone);\nconst date = String(body.date || '').trim();\nlet time = String(body.time || '').trim();\nconst therapist = String(body.therapist || '').trim().toLowerCase();\n\nconst missing = [['phone', phone], ['date', date]].filter(([, v]) => !v).map(([k]) => k);\nif (missing.length) return no(400, { cancelled: false, error: `Missing: ${missing.join(', ')}.` });\nif (time) {\n  const tm = time.match(/^(\\d{1,2}):(\\d{2})$/);\n  if (!tm) return no(400, { cancelled: false, error: `\"${time}\" is not a time. Use HH:MM, 24-hour.` });\n  time = `${tm[1].padStart(2, '0')}:${tm[2]}`;\n}\n\nconst mine = $input.all().map(i => i.json)\n  .filter(r => r.date === date && r.status === 'booked' && normPhone(r.phone) === phone && (!time || r.time === time)\n    && (!therapist || String(r.therapist).toLowerCase() === therapist));\n\nif (mine.length === 0) {\n  return no(200, { cancelled: false, message: `I can't find a booking for that phone number on ${date}${time ? ' at ' + time : ''}.` });\n}\nif (mine.length > 1) {\n  const times = mine.map(r => `${r.time} with ${r.therapist}`).join(' and ');\n  return no(200, { cancelled: false, message: `There are ${mine.length} bookings for that number on ${date}: ${times}. Which time should I cancel?` });\n}\n\nconst b = mine[0];\nreturn [{ json: {\n  cancel: true,\n  httpStatus: 200,\n  rowId: b.id,\n  reply: { cancelled: true, bookingId: b.bookingId, date: b.date, time: b.time, therapist: b.therapist,\n           message: `Cancelled the ${b.time} appointment with ${b.therapist} on ${b.date}. Reference ${b.bookingId}.` },\n} }];\n"
+      }
+    },
+    {
+      "name": "Can cancel?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        640
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cancel",
+              "leftValue": "={{ $json.cancel }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Mark cancelled",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        540
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "update",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "wLHF1O85PJ6QXfGK"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $json.rowId }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "status": "cancelled"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "bookingId",
+              "displayName": "bookingId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "date",
+              "displayName": "date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "time",
+              "displayName": "time",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "therapist",
+              "displayName": "therapist",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "patientName",
+              "displayName": "patientName",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "phone",
+              "displayName": "phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Reply cancelled",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1100,
+        540
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($('Decide cancellation').item.json.reply) }}",
+        "options": {
+          "responseCode": "={{ $('Decide cancellation').item.json.httpStatus }}"
+        }
+      }
+    },
+    {
+      "name": "Reply not cancelled",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        880,
+        740
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.reply) }}",
+        "options": {
+          "responseCode": "={{ $('Decide cancellation').item.json.httpStatus }}"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Check availability": {
+      "main": [
+        [
+          {
+            "node": "Bookings that day",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bookings that day": {
+      "main": [
+        [
+          {
+            "node": "Work out free times",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Work out free times": {
+      "main": [
+        [
+          {
+            "node": "Reply with times",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Book appointment": {
+      "main": [
+        [
+          {
+            "node": "Bookings that day (re-check)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bookings that day (re-check)": {
+      "main": [
+        [
+          {
+            "node": "Decide booking",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decide booking": {
+      "main": [
+        [
+          {
+            "node": "Can book?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Can book?": {
+      "main": [
+        [
+          {
+            "node": "Save booking",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reply not booked",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save booking": {
+      "main": [
+        [
+          {
+            "node": "Bookings that day (after save)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bookings that day (after save)": {
+      "main": [
+        [
+          {
+            "node": "Did we win the slot?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Did we win the slot?": {
+      "main": [
+        [
+          {
+            "node": "Won the slot?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Won the slot?": {
+      "main": [
+        [
+          {
+            "node": "Reply booked",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Undo our booking",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Undo our booking": {
+      "main": [
+        [
+          {
+            "node": "Reply slot just taken",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cancel appointment": {
+      "main": [
+        [
+          {
+            "node": "Bookings that day (cancel)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bookings that day (cancel)": {
+      "main": [
+        [
+          {
+            "node": "Decide cancellation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decide cancellation": {
+      "main": [
+        [
+          {
+            "node": "Can cancel?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Can cancel?": {
+      "main": [
+        [
+          {
+            "node": "Mark cancelled",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reply not cancelled",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark cancelled": {
+      "main": [
+        [
+          {
+            "node": "Reply cancelled",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

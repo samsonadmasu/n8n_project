@@ -1,0 +1,9 @@
+title: Northgate · Transcribe
+[frame: n-transcribe-overview]
+Transcribe turns a caller's recording into text. It has six steps: the input, the speech to text call, a success path and a failure path.
+[frame: n-transcribe-stt]
+The ElevenLabs step uses the speech to text operation with the clinic's ElevenLabs credential. It reads the recording from the field called audio, which the Voice Loop passes straight through.
+[frame: n-transcribe-stt-settings]
+On the Settings tab, retry on fail is switched on: up to three tries, one second apart. The step is also set to carry on when it fails, sending the error down its own path instead of stopping the run.
+[frame: n-transcribe-could-not]
+If all three tries fail, staff are alerted, and Could not transcribe returns ok false, status five oh two, and a friendly message asking the caller to try again or type. The Voice Loop sends that straight back.

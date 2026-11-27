@@ -1,0 +1,231 @@
+{
+  "name": "Northgate · Transcribe",
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Africa/Addis_Ababa",
+    "errorWorkflow": "IirH2iDy25qNBr69"
+  },
+  "nodes": [
+    {
+      "name": "Recording in",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "name": "STT · ElevenLabs",
+      "type": "@elevenlabs/n8n-nodes-elevenlabs.elevenLabs",
+      "typeVersion": 1,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "resource": "speech",
+        "operation": "speechToText",
+        "file": "audio",
+        "additionalOptions": {},
+        "requestOptions": {}
+      },
+      "credentials": {
+        "elevenLabsApi": {
+          "id": "SvCckO55wBkLq7Iz",
+          "name": "ElevenLabs account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "name": "Transcript",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        440,
+        200
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "Transcript-ok",
+              "name": "ok",
+              "type": "boolean",
+              "value": true
+            },
+            {
+              "id": "Transcript-text",
+              "name": "text",
+              "type": "string",
+              "value": "={{ $json.text }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "STT alert",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        440,
+        420
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "STT alert-workflow",
+              "name": "workflow",
+              "type": "string",
+              "value": "Northgate · Transcribe"
+            },
+            {
+              "id": "STT alert-node",
+              "name": "node",
+              "type": "string",
+              "value": "STT · ElevenLabs"
+            },
+            {
+              "id": "STT alert-message",
+              "name": "message",
+              "type": "string",
+              "value": "=Speech-to-text failed: {{ ($json.error && ($json.error.message || $json.error)) || 'unknown error' }} (session {{ $('Recording in').first().json.sessionId }})"
+            },
+            {
+              "id": "STT alert-executionUrl",
+              "name": "executionUrl",
+              "type": "string",
+              "value": "=https://YOUR-N8N-INSTANCE.app.n8n.cloud/workflow/{{ $workflow.id }}/executions/{{ $execution.id }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Tell staff (STT)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        660,
+        420
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "IirH2iDy25qNBr69"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "name": "Could not transcribe",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        880,
+        420
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "Could not transcribe-ok",
+              "name": "ok",
+              "type": "boolean",
+              "value": false
+            },
+            {
+              "id": "Could not transcribe-status",
+              "name": "status",
+              "type": "number",
+              "value": 502
+            },
+            {
+              "id": "Could not transcribe-alerted",
+              "name": "alerted",
+              "type": "boolean",
+              "value": "={{ !$json.error }}"
+            },
+            {
+              "id": "Could not transcribe-error",
+              "name": "error",
+              "type": "string",
+              "value": "Sorry, we couldn't process the recording. Please try again, or type your message."
+            }
+          ]
+        },
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Recording in": {
+      "main": [
+        [
+          {
+            "node": "STT · ElevenLabs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "STT · ElevenLabs": {
+      "main": [
+        [
+          {
+            "node": "Transcript",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "STT alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "STT alert": {
+      "main": [
+        [
+          {
+            "node": "Tell staff (STT)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tell staff (STT)": {
+      "main": [
+        [
+          {
+            "node": "Could not transcribe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {}
+}

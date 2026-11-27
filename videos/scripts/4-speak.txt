@@ -1,0 +1,9 @@
+title: Northgate · Speak
+[frame: n-speak-overview]
+Speak turns the receptionist's reply into audio. It has the same shape as Transcribe: one service call, a success path and a failure path.
+[frame: n-speak-text-in]
+Text in defines the inputs this sub-workflow accepts. Test data is pinned on it, a sample reply and a session id, so it can be run on its own without the rest of the system.
+[frame: n-speak-tts]
+The ElevenLabs step uses text to speech, reading the reply from its input. The voice is set by an expression: normally the clinic's chosen voice, or a deliberately broken one when a test simulates an outage. Like Transcribe, it retries three times and carries on to an error path.
+[frame: n-speak-audio-binary]
+The Audio step marks success. Further down are the two settings that matter: include other input fields is on, and strip binary data is off. Without them, n8n quietly dropped the audio file. The tests caught it.
